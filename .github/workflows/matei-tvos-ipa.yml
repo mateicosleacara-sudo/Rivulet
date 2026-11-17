@@ -55,15 +55,20 @@ jobs:
             -destination 'generic/platform=tvOS' \
             -archivePath "$RUNNER_TEMP/Rivulet.xcarchive" \
             -clonedSourcePackagesDirPath SourcePackages \
-            -onlyUsePackageVersionsFromResolvedFile \
             -skipPackagePluginValidation \
             -skipMacroValidation \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            archive 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -E "error:|warning: .*(trait|entitlement)|\*\* ARCHIVE" || true
-          test -d "$RUNNER_TEMP/Rivulet.xcarchive/Products/Applications/Rivulet.app"
+            archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || {
+              grep -n -B2 -A12 "error" "$RUNNER_TEMP/xcodebuild.log" | head -300
+              tail -60 "$RUNNER_TEMP/xcodebuild.log"
+              exit 1
+            }
+          grep -E "\*\* ARCHIVE" "$RUNNER_TEMP/xcodebuild.log"
+          # The height-audio trait adds LibTrueHD, which the committed Package.resolved lacks.
+          git diff --stat -- Rivulet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved || true
 
       - name: Package .ipa (free-account friendly)
         run: |
