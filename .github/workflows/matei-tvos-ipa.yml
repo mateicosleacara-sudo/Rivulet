@@ -1,0 +1,101 @@
+name: tvOS IPA (unsigned, for Sideloadly)
+
+# Personal build for the matei-custom branch. Produces an unsigned tvOS .ipa
+# that Sideloadly signs with a free Apple ID. Nothing is published: the .ipa
+# is a short-lived run artifact only.
+
+on:
+  push:
+    branches: [matei-custom]
+  workflow_dispatch:
+
+concurrency:
+  group: matei-tvos-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Select Xcode (codemagic.yaml pin)
+        run: |
+          VERSION="$(awk '/^ *xcode:/ {print $2; exit}' codemagic.yaml)"
+          ls -d /Applications/Xcode*.app
+          sudo xcode-select -s "/Applications/Xcode_$VERSION.app/Contents/Developer"
+          xcodebuild -version
+
+      - name: Empty Secrets.swift (no Sentry)
+        run: |
+          cat > RivuletCore/Config/Secrets.swift <<'EOF'
+          import Foundation
+
+          enum Secrets {
+              static let sentryDSN = ""
+          }
+          EOF
+
+      - name: Cache Swift packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: SourcePackages
+          key: spm-ipa-${{ runner.os }}-${{ hashFiles('Rivulet.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'Rivulet.xcodeproj/project.pbxproj') }}
+          restore-keys: spm-ipa-${{ runner.os }}-
+
+      - name: Archive (Release, device, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Rivulet.xcodeproj \
+            -scheme "Rivulet" \
+            -configuration Release \
+            -destination 'generic/platform=tvOS' \
+            -archivePath "$RUNNER_TEMP/Rivulet.xcarchive" \
+            -clonedSourcePackagesDirPath SourcePackages \
+            -onlyUsePackageVersionsFromResolvedFile \
+            -skipPackagePluginValidation \
+            -skipMacroValidation \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            archive 2>&1 | tee "$RUNNER_TEMP/xcodebuild.log" | grep -E "error:|warning: .*(trait|entitlement)|\*\* ARCHIVE" || true
+          test -d "$RUNNER_TEMP/Rivulet.xcarchive/Products/Applications/Rivulet.app"
+
+      - name: Package .ipa (free-account friendly)
+        run: |
+          set -eu
+          OUT="$RUNNER_TEMP/out"; mkdir -p "$OUT/Payload"
+          cp -R "$RUNNER_TEMP/Rivulet.xcarchive/Products/Applications/Rivulet.app" "$OUT/Payload/"
+          APP="$OUT/Payload/Rivulet.app"
+          # Free provisioning can't sign the Top Shelf or Background Assets extensions.
+          rm -rf "$APP/PlugIns" "$APP/Extensions"
+          # Apple-hosted asset packs need the App Group + extension; the app falls
+          # back to downloading the speech model itself.
+          for key in BAAppGroupID BAHasManagedAssetPacks BAUsesAppleHosting BAEssentialDownloadAllowance BAMaxInstallSize BAInitialDownloadRestrictions; do
+            /usr/libexec/PlistBuddy -c "Delete :$key" "$APP/Info.plist" 2>/dev/null || true
+          done
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist"
+          ls "$APP/Frameworks" || true
+          (cd "$OUT" && zip -qry Rivulet-tvOS-unsigned.ipa Payload)
+          ls -lh "$OUT"/*.ipa
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Rivulet-tvOS-${{ github.run_number }}
+          path: ${{ runner.temp }}/out/Rivulet-tvOS-unsigned.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log-${{ github.run_number }}
+          path: ${{ runner.temp }}/xcodebuild.log
+          retention-days: 7
