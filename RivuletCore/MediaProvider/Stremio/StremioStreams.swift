@@ -61,15 +61,21 @@ nonisolated enum StremioStreamParser {
         let tokens = Set(lower.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "+" && $0 != "-" && $0 != "." })
             .map(String.init))
 
-        let resolution: (label: String, height: Int)? =
-            tokens.contains("2160p") || tokens.contains("4k") || tokens.contains("uhd") ? ("4k", 2160)
-            : tokens.contains("1080p") || tokens.contains("1080i") ? ("1080", 1080)
-            : tokens.contains("720p") ? ("720", 720)
-            : tokens.contains("576p") ? ("576", 576)
-            : tokens.contains("480p") || tokens.contains("sd") ? ("480", 480) : nil
+        var resolution: (label: String, height: Int)?
+        if tokens.contains("2160p") || tokens.contains("4k") || tokens.contains("uhd") {
+            resolution = ("4k", 2160)
+        } else if tokens.contains("1080p") || tokens.contains("1080i") {
+            resolution = ("1080", 1080)
+        } else if tokens.contains("720p") {
+            resolution = ("720", 720)
+        } else if tokens.contains("576p") {
+            resolution = ("576", 576)
+        } else if tokens.contains("480p") || tokens.contains("sd") {
+            resolution = ("480", 480)
+        }
 
         let range: VideoTrack.VideoRange
-        let hasDV = tokens.contains("dv") || tokens.contains("dovi") || lower.contains("dolby vision") || lower.contains("dolbyvision")
+        let hasDV = !tokens.isDisjoint(with: ["dv", "dovi"]) || lower.contains("dolby vision") || lower.contains("dolbyvision")
         let hasHDR10Plus = lower.contains("hdr10+") || lower.contains("hdr10plus")
         if hasDV { range = .dolbyVision(profile: lower.contains("fel") || lower.contains("p7") ? 7 : 8) }
         else if hasHDR10Plus { range = .hdr10Plus }
@@ -77,9 +83,14 @@ nonisolated enum StremioStreamParser {
         else if tokens.contains("hlg") { range = .hlg }
         else { range = .sdr }
 
-        let codec = tokens.contains("av1") ? "av1"
-            : (tokens.contains("hevc") || tokens.contains("x265") || tokens.contains("h265") || tokens.contains("h.265")) ? "hevc"
-            : (tokens.contains("x264") || tokens.contains("h264") || tokens.contains("h.264") || tokens.contains("avc")) ? "h264" : ""
+        var codec = ""
+        if tokens.contains("av1") {
+            codec = "av1"
+        } else if !tokens.isDisjoint(with: ["hevc", "x265", "h265", "h.265"]) {
+            codec = "hevc"
+        } else if !tokens.isDisjoint(with: ["x264", "h264", "h.264", "avc"]) {
+            codec = "h264"
+        }
 
         let video = VideoTrack(id: "\(id)-v", codec: codec, profile: nil, level: nil, width: nil,
                                height: resolution?.height, frameRate: nil, bitrate: nil, videoRange: range,
@@ -122,7 +133,8 @@ nonisolated enum StremioStreamParser {
         else if tokens.contains("opus") { codec = "opus" }
         guard let codec else { return nil }
         if atmos { profile = (profile.map { $0 + " " } ?? "") + "atmos" }
-        let channels: Int? = lower.contains("7.1") ? 8 : lower.contains("5.1") ? 6 : lower.contains("2.0") ? 2 : nil
+        var channels: Int?
+        if lower.contains("7.1") { channels = 8 } else if lower.contains("5.1") { channels = 6 } else if lower.contains("2.0") { channels = 2 }
         return AudioTrack(id: "\(id)-a", index: 1, codec: codec, profile: profile, channels: channels, channelLayout: nil,
                           language: nil, title: nil, extendedTitle: nil, bitrate: nil, samplingRate: nil,
                           isDefault: true, isForced: false, isSelected: true)
