@@ -30,35 +30,50 @@ final class ExternalStreamProvider: MediaProvider, @unchecked Sendable {
     let link: ExternalStreamLink
     /// The stream after redirects, and what the response said about it.
     let resolved: ExternalStreamResolver.Resolved
+    /// Title, artwork and identity (`ExternalStreamMetadata`).
+    let info: ExternalStreamInfo
     let resumeKey: String
 
-    init(link: ExternalStreamLink, resolved: ExternalStreamResolver.Resolved) {
+    init(link: ExternalStreamLink, resolved: ExternalStreamResolver.Resolved, info: ExternalStreamInfo) {
         self.link = link
         self.resolved = resolved
-        self.resumeKey = ExternalStreamResumeStore.key(for: link.resumeIdentity)
+        self.info = info
+        self.resumeKey = ExternalStreamResumeStore.key(for: info.identity)
+    }
+
+    /// What the resume prompt and the store call it.
+    var displayTitle: String {
+        guard let series = info.seriesTitle, let season = info.season, let episode = info.episode else { return info.title }
+        return "\(series) S\(season)E\(episode)"
     }
 
     // MARK: - The one item
 
     var item: MediaItem {
         let saved = ExternalStreamResumeStore.position(for: resumeKey)
+        let art = MediaArtwork(poster: info.poster, backdrop: info.backdrop, thumbnail: nil, logo: info.logo)
+        let isEpisode = info.kind == .episode
         return MediaItem(
             ref: MediaItemRef(providerID: id, itemID: resumeKey),
-            kind: .movie,
-            title: link.displayTitle,
-            sortTitle: nil, overview: nil, year: nil,
+            kind: info.kind,
+            title: info.title,
+            sortTitle: nil, overview: info.overview, year: info.year,
             runtime: saved?.duration,
             parentRef: nil, grandparentRef: nil,
-            episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+            seriesTitle: info.seriesTitle,
+            episodeNumber: info.episode, seasonNumber: info.season, childProgress: nil,
             userState: MediaUserState(isPlayed: false, viewOffset: saved?.position ?? 0,
                                       isFavorite: false, lastViewedAt: saved?.updated),
-            artwork: MediaArtwork(poster: nil, backdrop: nil, thumbnail: nil, logo: nil),
-            parentArtwork: nil, grandparentArtwork: nil
+            artwork: art,
+            parentArtwork: nil,
+            // An episode's poster and logo are the show's.
+            grandparentArtwork: isEpisode ? art : nil,
+            externalIDs: info.imdbID.map { ["imdb": $0] }
         )
     }
 
     var source: MediaSource {
-        let fileName = link.filename ?? resolved.fileName ?? resolved.url.lastPathComponent.removingPercentEncoding
+        let fileName = info.fileName ?? resolved.url.lastPathComponent.removingPercentEncoding
         let ext = (fileName as NSString?)?.pathExtension.lowercased()
         return MediaSource(
             id: "external",
@@ -85,9 +100,11 @@ final class ExternalStreamProvider: MediaProvider, @unchecked Sendable {
     }
 
     var detail: MediaItemDetail {
-        MediaItemDetail(item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [], writers: [],
-                        chapters: [], mediaSources: [source], trailerURL: nil, contentRating: nil,
-                        nextEpisode: nil, collections: [])
+        var detail = MediaItemDetail(item: item, tagline: nil, genres: [], studios: [], cast: [], directors: [],
+                                     writers: [], chapters: [], mediaSources: [source], trailerURL: nil,
+                                     contentRating: nil, nextEpisode: nil, collections: [])
+        if let imdb = info.imdbID { detail.externalIDs = ["imdb": imdb] }
+        return detail
     }
 
     var stream: StreamInfo {
@@ -109,13 +126,13 @@ final class ExternalStreamProvider: MediaProvider, @unchecked Sendable {
     }
 
     func progressReporter(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?) -> any ProgressReporter {
-        ExternalStreamProgressReporter(key: resumeKey, title: link.displayTitle)
+        ExternalStreamProgressReporter(key: resumeKey, title: displayTitle)
     }
 
     func markPlayed(_ itemRef: MediaItemRef) async throws { ExternalStreamResumeStore.clear(resumeKey) }
     func markUnplayed(_ itemRef: MediaItemRef) async throws { ExternalStreamResumeStore.clear(resumeKey) }
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws {
-        ExternalStreamResumeStore.save(resumeKey, position: position, duration: nil, title: link.displayTitle)
+        ExternalStreamResumeStore.save(resumeKey, position: position, duration: nil, title: displayTitle)
     }
 
     func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws {}

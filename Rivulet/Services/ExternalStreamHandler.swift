@@ -120,8 +120,10 @@ final class ExternalStreamHandler {
         guard ProviderPlayer.claimStart() else { return }
         Task { @MainActor in
             let resolved = await ExternalStreamResolver.resolve(link.streamURL)
+            let info = await ExternalStreamMetadata.info(link: link, resolved: resolved)
             ProviderPlayer.finishStart()
-            let provider = ExternalStreamProvider(link: link, resolved: resolved)
+            let provider = ExternalStreamProvider(link: link, resolved: resolved, info: info)
+            DiagLog.notice(.deepLink, "External stream: matched=\(info.imdbID != nil) kind=\(info.kind.rawValue)")
             if let status = resolved.statusCode, status >= 400 {
                 DiagLog.error(.deepLink, "External stream answered HTTP \(status)")
                 presentNotice(title: String(localized: "Couldn't Play"),
@@ -131,9 +133,9 @@ final class ExternalStreamHandler {
                 return
             }
             guard let resume = ExternalStreamResumeStore.resumePoint(for: provider.resumeKey) else {
-                return present(provider, startOffset: nil, from: root)
+                return self.present(provider, startOffset: nil, from: root)
             }
-            let alert = UIAlertController(title: link.displayTitle, message: nil, preferredStyle: .actionSheet)
+            let alert = UIAlertController(title: provider.displayTitle, message: nil, preferredStyle: .actionSheet)
             alert.addAction(UIAlertAction(
                 title: String(localized: "Resume from \(PlexMetadata.formatResumeTime(Int(resume * 1000)))"),
                 style: .default) { [weak self] _ in self?.present(provider, startOffset: resume, from: root) })
@@ -146,7 +148,24 @@ final class ExternalStreamHandler {
     }
 
     private func present(_ provider: ExternalStreamProvider, startOffset: TimeInterval?, from root: UIViewController) {
-        let viewModel = UniversalPlayerViewModel(providerPlayback: provider.playback, startOffset: startOffset)
+        Task { @MainActor in
+            // The loading screen's backdrop and the Now Playing poster, as a server item has them.
+            async let art = Self.image(provider.info.backdrop, full: true)
+            async let poster = Self.image(provider.info.poster, full: false)
+            let (backdrop, thumb) = await (art, poster)
+            let viewModel = UniversalPlayerViewModel(providerPlayback: provider.playback, startOffset: startOffset,
+                                                     loadingArtImage: backdrop, loadingThumbImage: thumb)
+            self.present(viewModel, provider: provider, from: root)
+        }
+    }
+
+    private static func image(_ url: URL?, full: Bool) async -> UIImage? {
+        guard let url else { return nil }
+        if full { return await ImageCacheManager.shared.imageFullSize(for: url) }
+        return await ImageCacheManager.shared.image(for: url)
+    }
+
+    private func present(_ viewModel: UniversalPlayerViewModel, provider: ExternalStreamProvider, from root: UIViewController) {
         let link = provider.link
         let key = provider.resumeKey
         final class Flag { var played = false }
@@ -165,7 +184,7 @@ final class ExternalStreamHandler {
                     ExternalStreamResumeStore.clear(key)
                 } else if viewModel.currentTime > 0 {
                     ExternalStreamResumeStore.save(key, position: viewModel.currentTime,
-                                                   duration: viewModel.duration, title: link.displayTitle)
+                                                   duration: viewModel.duration, title: provider.displayTitle)
                 }
             }
             Self.open(flag.played ? link.successURL : (link.errorURL ?? link.successURL))
