@@ -943,6 +943,9 @@ final class PlayerDetailsPaneView: UIView {
         if let stream = streams.first(where: { $0.isVideo }) {
             if let title = stream.displayTitle ?? stream.extendedDisplayTitle {
                 video.append(Row(label: String(localized: "Format"), value: title))
+            } else if let engineCodec {
+                // A stream described only by an addon's text: the codec the engine read.
+                video.append(Row(label: String(localized: "Codec"), value: engineCodec.uppercased()))
             }
             if stream.isDolbyVision || engineDolbyVisionProfile != nil {
                 // The engine read the file itself; a server's (or an addon's) description is second best.

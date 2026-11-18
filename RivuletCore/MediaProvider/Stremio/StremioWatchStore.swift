@@ -85,12 +85,30 @@ nonisolated enum StremioWatchStore {
             }
     }
 
+    /// Per series, the episode last finished, when finishing it is the latest thing done in that
+    /// series (newest first). Continue Watching offers the episode after it.
+    static func finishedEpisodes(providerID: String) -> [(item: MediaItem, finished: Date)] {
+        let all = lock.withLock { load() }
+        var latest: [String: Entry] = [:]
+        for entry in all.values where entry.played || entry.position > 0 {
+            guard let item = entry.item, item.ref.providerID == providerID, item.kind == .episode,
+                  let series = item.grandparentRef?.itemID else { continue }
+            if let current = latest[series], current.updated >= entry.updated { continue }
+            latest[series] = entry
+        }
+        return latest.values
+            .filter(\.played)
+            .sorted { $0.updated > $1.updated }
+            .compactMap { entry in entry.item.map { (item: $0, finished: entry.updated) } }
+    }
+
     /// What Play on a show means: the episode last stopped partway, else the one after the last
     /// finished, else nil (the first unplayed, which `EpisodePicker` falls back to).
     static func nextEpisode(in episodes: [MediaItem]) -> MediaItem? {
         let all = lock.withLock { load() }
+        // Only real viewing counts: a dismissed Continue Watching card leaves a hidden, unwatched record.
         let watched = episodes.enumerated().compactMap { index, episode in
-            all[key(episode.ref)].map { (index, $0) }
+            all[key(episode.ref)].flatMap { $0.played || $0.position > 0 ? (index, $0) : nil }
         }
         guard let (index, last) = watched.max(by: { $0.1.updated < $1.1.updated }) else { return nil }
         if !last.played, last.position > 0 { return episodes[index] }

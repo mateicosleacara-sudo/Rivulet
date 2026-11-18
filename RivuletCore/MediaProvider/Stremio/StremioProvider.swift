@@ -61,6 +61,10 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
 
     let authKey: String
     private let addonStore: StremioAddonStore
+    private let binge = StremioBinge()
+
+    /// The picker's pick for the next resolve: played as chosen, never swapped for the series' release.
+    func markExplicitPick(_ sourceID: String) { binge.markExplicitPick(sourceID) }
     private let metaCache = StremioCache<StremioMeta>(lifetime: 1800)
     private let streamCache = StremioCache<[StremioStreamOption]>(lifetime: 600)
 
@@ -227,8 +231,45 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { [] }
 
+    /// Titles stopped partway, and for a series whose last episode was finished, the next one
+    /// (once it has aired and unless its card was dismissed), newest first, one per series.
     func continueWatching(limit: Int) async throws -> [MediaItem] {
-        Array(StremioWatchStore.continueWatching(providerID: id).prefix(limit))
+        let inProgress = StremioWatchStore.continueWatching(providerID: id)
+        let finished = StremioWatchStore.finishedEpisodes(providerID: id).prefix(limit)
+        let nextUp = await withTaskGroup(of: MediaItem?.self) { group in
+            for (episode, finishedAt) in finished {
+                group.addTask { await self.nextUp(after: episode, finishedAt: finishedAt) }
+            }
+            var all: [MediaItem] = []
+            for await item in group { if let item { all.append(item) } }
+            return all
+        }
+        var seriesSeen = Set<String>()
+        return (inProgress + nextUp)
+            .sorted { ($0.userState.lastViewedAt ?? .distantPast) > ($1.userState.lastViewedAt ?? .distantPast) }
+            .filter { item in
+                guard item.kind == .episode, let series = item.grandparentRef?.itemID else { return true }
+                return seriesSeen.insert(series).inserted
+            }
+            .prefix(limit)
+            .map { $0 }
+    }
+
+    private func nextUp(after episode: MediaItem, finishedAt: Date) async -> MediaItem? {
+        guard let ref = StremioRef(episode.ref.itemID),
+              let meta = try? await self.meta(type: ref.type, id: ref.metaID) else { return nil }
+        let episodes = allEpisodesSorted(meta, ref: ref)
+        guard let index = episodes.firstIndex(where: { $0.ref == episode.ref }), episodes.indices.contains(index + 1) else {
+            return nil
+        }
+        var next = episodes[index + 1]
+        // Not aired yet (or no date to tell): nothing to offer.
+        let today = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withFullDate])
+        guard let released = next.releaseDate, released <= today else { return nil }
+        // Started, finished or dismissed already: the store decides (in progress shows on its own).
+        if StremioWatchStore.entry(for: next.ref) != nil { return nil }
+        next.userState = MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: finishedAt)
+        return next
     }
 
     /// Every catalog that takes a search, merged in addon order.
@@ -485,10 +526,22 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         }
         let runtime = await watchItem(for: itemRef)?.runtime
         let options = try await streamOptions(type: ref.type, id: ref.streamID, runtime: runtime)
-        let chosen = sourceID.flatMap { id in options.first { $0.id == id } }
+        let explicit = sourceID.map(binge.takeExplicitPick) ?? false
+        var chosen = explicit ? sourceID.flatMap { id in options.first { $0.id == id } } : nil
+        // Up Next and Play without a pick: the release last played in this series (Stremio's
+        // bingeGroup), else the same addon's best, as Stremio's binge-watching does.
+        if chosen == nil, ref.kind == .episode, let last = binge.last(for: ref.metaID) {
+            let playable = StremioStreamParser.playable(options)
+            chosen = last.group.flatMap { group in playable.first { $0.stream.bingeGroup == group } }
+                ?? VersionRanking.choose(.best, from: playable.filter { $0.addonName == last.addon }.map(\.source))
+                    .flatMap { best in options.first { $0.id == best.id } }
+        }
+        chosen = chosen
+            ?? sourceID.flatMap { id in options.first { $0.id == id } }
             ?? VersionRanking.choose(.best, from: StremioStreamParser.playable(options).map(\.source))
                 .flatMap { best in options.first { $0.id == best.id } }
         guard let option = chosen else { throw MediaProviderError.notPlayable }
+        binge.record(metaID: ref.metaID, group: option.stream.bingeGroup, addon: option.addonName)
 
         async let resolved = ExternalStreamResolver.resolve(option.url)
         async let subtitles = subtitleTracks(type: ref.type, id: ref.streamID, stream: option.stream)
@@ -512,15 +565,24 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     private func subtitleTracks(type: String, id streamID: String, stream: StremioStream) async -> [SubtitleTrack] {
         let installed = (try? await self.addons().filter { $0.manifest.supports("subtitles", type: type, id: streamID) }) ?? []
         var all = stream.subtitles
-        await withTaskGroup(of: [StremioSubtitle].self) { group in
+        // One deadline for all of them: whatever arrived in 3 s plays, so a slow subtitle addon
+        // never holds up the start. (Subtitles inside the file don't come from here.)
+        await withTaskGroup(of: [StremioSubtitle]?.self) { group in
             for addon in installed {
                 group.addTask {
                     let response: StremioSubtitlesResponse? = try? await StremioClient.resource(
-                        addon, resource: "subtitles", type: type, id: streamID, timeout: 8)
+                        addon, resource: "subtitles", type: type, id: streamID, timeout: 3)
                     return response?.subtitles ?? []
                 }
             }
-            for await subs in group { all += subs }
+            group.addTask {
+                try? await Task.sleep(for: .seconds(3))
+                return nil
+            }
+            for await subs in group {
+                guard let subs else { group.cancelAll(); break }
+                all += subs
+            }
         }
         let wanted = [TrackLanguage.normalize(TrackIntentStore.subtitleLanguage), TrackLanguage.english]
         var perLanguage: [String: Int] = [:]
@@ -647,5 +709,30 @@ actor StremioCache<Value: Sendable> {
             entries[key] = (value, Date())
         }
         return value
+    }
+}
+
+/// The release last played per series (bingeGroup and addon), and picks the user made by hand.
+nonisolated final class StremioBinge: @unchecked Sendable {
+    struct Last: Sendable {
+        let group: String?
+        let addon: String
+    }
+
+    private let lock = NSLock()
+    private var lastBySeries: [String: Last] = [:]
+    private var explicitPicks: Set<String> = []
+
+    func markExplicitPick(_ sourceID: String) { lock.withLock { _ = explicitPicks.insert(sourceID) } }
+
+    /// True once for a pick made by hand.
+    func takeExplicitPick(_ sourceID: String) -> Bool {
+        lock.withLock { explicitPicks.remove(sourceID) != nil }
+    }
+
+    func last(for metaID: String) -> Last? { lock.withLock { lastBySeries[metaID] } }
+
+    func record(metaID: String, group: String?, addon: String) {
+        lock.withLock { lastBySeries[metaID] = Last(group: group, addon: addon) }
     }
 }

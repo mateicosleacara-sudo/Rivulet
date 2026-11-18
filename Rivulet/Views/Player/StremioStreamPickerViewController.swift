@@ -250,6 +250,16 @@ final class StremioStreamPickerViewController: UIViewController {
         streamTable.isHidden = false
     }
 
+    /// A move from one row to another is the user browsing: from then on the list stays on what
+    /// they are looking at, whichever addon answers next. The first focus (placed by the picker)
+    /// doesn't count, so until then the list still follows the top addon as it arrives.
+    override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        super.didUpdateFocus(in: context, with: coordinator)
+        guard let previous = context.previouslyFocusedView, let next = context.nextFocusedView else { return }
+        let inLists = { (view: UIView) in view.isDescendant(of: self.streamTable) || view.isDescendant(of: self.addonTable) }
+        if inLists(previous), inLists(next) { userChoseAddon = true }
+    }
+
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
         streamTable.isHidden ? [cancelButton] : [streamTable]
     }

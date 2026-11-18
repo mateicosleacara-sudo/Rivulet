@@ -49,6 +49,7 @@ enum StremioPlayFlow {
             picker.onSelect = { [weak picker] option in
                 guard let picker else { return }
                 picker.showStarting()
+                provider.markExplicitPick(option.id)
                 Task { @MainActor in
                     do {
                         let playback = try await ProviderPlayback.prepare(
