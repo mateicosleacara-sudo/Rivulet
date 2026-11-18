@@ -151,8 +151,66 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { [] }
 
+    /// Stremio's Continue Watching (the account library) merged with this device's record;
+    /// a title in both shows once, at whichever position is newer.
     func continueWatching(limit: Int) async throws -> [MediaItem] {
-        Array(StremioWatchStore.continueWatching(providerID: id).prefix(limit))
+        await StremioLibrary.refresh(authKey: authKey, force: true)
+        let entries = StremioLibrary.entries.filter(\.isInContinueWatching)
+            .sorted { ($0.lastWatched ?? .distantPast) > ($1.lastWatched ?? .distantPast) }
+            .prefix(limit)
+        let fromLibrary = await withTaskGroup(of: (Int, MediaItem?).self) { group in
+            for (index, entry) in entries.enumerated() {
+                group.addTask { (index, await self.continueItem(for: entry)) }
+            }
+            var all: [(Int, MediaItem?)] = []
+            for await result in group { all.append(result) }
+            return all.sorted { $0.0 < $1.0 }.compactMap(\.1)
+        }
+        let local = StremioWatchStore.continueWatching(providerID: id)
+        var merged: [String: MediaItem] = [:]
+        for item in fromLibrary + local {
+            let key = StremioRef(item.ref.itemID)?.metaID ?? item.ref.itemID
+            if let existing = merged[key],
+               (existing.userState.lastViewedAt ?? .distantPast) >= (item.userState.lastViewedAt ?? .distantPast) { continue }
+            merged[key] = item
+        }
+        return Array(merged.values
+            .sorted { ($0.userState.lastViewedAt ?? .distantPast) > ($1.userState.lastViewedAt ?? .distantPast) }
+            .prefix(limit))
+    }
+
+    /// The library entry as the item to resume: the episode it was on, or the movie.
+    private func continueItem(for entry: StremioLibraryEntry) async -> MediaItem? {
+        guard let meta = try? await self.meta(type: entry.type, id: entry.id) else { return nil }
+        let isMovie = entry.type == "movie"
+        let ref = StremioRef(kind: isMovie ? .movie : .series, type: entry.type, metaID: entry.id)
+        var item: MediaItem
+        if isMovie {
+            item = self.item(from: meta.preview, libraryID: nil)
+        } else if let videoID = entry.videoID,
+                  let episode = episodes(of: meta, ref: ref, season: nil).first(where: {
+                      StremioRef($0.ref.itemID)?.detail == videoID }) {
+            item = episode
+        } else {
+            return nil
+        }
+        item.userState = MediaUserState(isPlayed: false, viewOffset: entry.timeOffset, isFavorite: false,
+                                        lastViewedAt: entry.lastWatched)
+        return item
+    }
+
+    /// The newer of this device's record and the Stremio library for one movie or episode.
+    func userState(for itemRef: MediaItemRef) -> MediaUserState {
+        let local = StremioWatchStore.state(for: itemRef)
+        guard let ref = StremioRef(itemRef.itemID), let entry = StremioLibrary.entry(for: ref.metaID) else { return local }
+        let videoID = ref.kind == .episode ? ref.detail : ref.metaID
+        let isThisVideo = ref.kind == .movie || entry.videoID == videoID
+        guard isThisVideo, (entry.lastWatched ?? .distantPast) > (local.lastViewedAt ?? .distantPast) else { return local }
+        if ref.kind == .movie, entry.isWatched, entry.timeOffset == 0 {
+            return MediaUserState(isPlayed: true, viewOffset: 0, isFavorite: false, lastViewedAt: entry.lastWatched)
+        }
+        guard entry.timeOffset > 0 else { return local }
+        return MediaUserState(isPlayed: false, viewOffset: entry.timeOffset, isFavorite: false, lastViewedAt: entry.lastWatched)
     }
 
     /// Every catalog that takes a search, merged in addon order.
@@ -183,7 +241,7 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     func item(from preview: StremioMetaPreview, libraryID: String?) -> MediaItem {
         let isMovie = preview.type == "movie"
         let ref = StremioRef(kind: isMovie ? .movie : .series, type: preview.type, metaID: preview.id)
-        let state = StremioWatchStore.state(for: MediaItemRef(providerID: id, itemID: ref.itemID))
+        let state = userState(for: MediaItemRef(providerID: id, itemID: ref.itemID))
         return MediaItem(
             ref: MediaItemRef(providerID: id, itemID: ref.itemID),
             kind: isMovie ? .movie : .show,
@@ -242,7 +300,7 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
                 grandparentRef: showRef(ref),
                 seriesTitle: meta.preview.name,
                 episodeNumber: video.episode ?? index + 1, seasonNumber: seasonNumber, childProgress: nil,
-                userState: StremioWatchStore.state(for: itemRef),
+                userState: userState(for: itemRef),
                 artwork: MediaArtwork(poster: nil, backdrop: video.thumbnail ?? meta.preview.background,
                                       thumbnail: video.thumbnail, logo: nil),
                 parentArtwork: show.artwork, grandparentArtwork: show.artwork,
@@ -423,30 +481,60 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         return tracks
     }
 
-    // MARK: - Watch state (on this device; the Stremio library sync comes next)
+    // MARK: - Watch state (this device's record, mirrored to the Stremio library)
 
     func progressReporter(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?) -> any ProgressReporter {
         StremioProgressReporter(providerID: id, itemRef: itemRef, item: { [weak self] in
             try? await self?.fullDetail(for: itemRef).item
+        }, sync: { [weak self] item, position, force in
+            await self?.syncLibrary(itemRef, item: item, position: position, force: force)
         })
+    }
+
+    /// One position to the Stremio library: at most every 30 s while playing, always on pause and stop.
+    func syncLibrary(_ itemRef: MediaItemRef, item: MediaItem?, position: TimeInterval, force: Bool) async {
+        guard let ref = StremioRef(itemRef.itemID), ref.kind == .movie || ref.kind == .episode,
+              StremioLibrary.shouldWrite(ref.metaID, force: force) else { return }
+        await StremioLibrary.refresh(authKey: authKey)
+        await StremioLibrary.record(StremioLibrary.Progress(
+            metaID: ref.metaID, type: ref.type,
+            name: item?.seriesTitle ?? item?.title ?? ref.metaID,
+            poster: item?.grandparentArtwork?.poster ?? item?.artwork.poster,
+            videoID: ref.streamID, position: position, duration: item?.runtime), authKey: authKey)
+    }
+
+    private func setLibraryWatched(_ itemRef: MediaItemRef, item: MediaItem?, watched: Bool) async {
+        guard let ref = StremioRef(itemRef.itemID), ref.kind == .movie || ref.kind == .episode else { return }
+        await StremioLibrary.refresh(authKey: authKey)
+        await StremioLibrary.setWatched(metaID: ref.metaID, type: ref.type,
+                                        name: item?.seriesTitle ?? item?.title ?? ref.metaID,
+                                        poster: item?.grandparentArtwork?.poster ?? item?.artwork.poster,
+                                        videoID: ref.streamID, watched: watched, authKey: authKey)
     }
 
     func markPlayed(_ itemRef: MediaItemRef) async throws {
         let item = try? await fullDetail(for: itemRef).item
         StremioWatchStore.markPlayed(itemRef, item: item, played: true)
+        await setLibraryWatched(itemRef, item: item, watched: true)
     }
 
     func markUnplayed(_ itemRef: MediaItemRef) async throws {
         StremioWatchStore.markPlayed(itemRef, item: nil, played: false)
+        await setLibraryWatched(itemRef, item: nil, watched: false)
     }
 
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws {
         let item = try? await fullDetail(for: itemRef).item
         StremioWatchStore.save(itemRef, position: position, item: item)
+        await syncLibrary(itemRef, item: item, position: position, force: true)
     }
 
     func removeFromContinueWatching(_ item: MediaItem) async throws {
         StremioWatchStore.removeFromContinueWatching(item.ref)
+        if let ref = StremioRef(item.ref.itemID) {
+            await StremioLibrary.refresh(authKey: authKey)
+            await StremioLibrary.dismiss(metaID: ref.metaID, authKey: authKey)
+        }
     }
 
     func canRemoveFromContinueWatching(_ item: MediaItem) -> Bool { true }
