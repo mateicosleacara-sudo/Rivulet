@@ -932,7 +932,9 @@ final class PlayerDetailsPaneView: UIView {
                               dolbyVision: DolbyVisionPlayback? = nil,
                               enhancementLayer: DolbyVisionLayerType? = nil,
                               enhanceDialogue: String? = nil,
-                              upscale: String? = nil) -> [Section] {
+                              upscale: String? = nil,
+                              engineCodec: String? = nil,
+                              engineDolbyVisionProfile: Int? = nil) -> [Section] {
         let media = metadata.Media?.first
         let streams = media?.Part?.first?.Stream ?? []
         var sections: [Section] = []
@@ -953,9 +955,18 @@ final class PlayerDetailsPaneView: UIView {
             }
             let color = [stream.bitDepth.map { "\($0)-bit" }, stream.colorSpace].compactMap { $0 }
             if !color.isEmpty { video.append(Row(label: String(localized: "Color"), value: color.joined(separator: " · "))) }
-        } else if let media {
+        } else if let media, media.videoCodec != nil || media.videoResolution != nil {
             if let codec = media.videoCodec { video.append(Row(label: String(localized: "Codec"), value: codec.uppercased())) }
             if let resolution = media.videoResolution { video.append(Row(label: String(localized: "Resolution"), value: resolution)) }
+        }
+        // No server description of the video (a stream sent by another app): what the engine read.
+        if !streams.contains(where: { $0.isVideo }), media?.videoCodec == nil {
+            if let engineCodec { video.append(Row(label: String(localized: "Codec"), value: engineCodec.uppercased())) }
+            if let engineDolbyVisionProfile {
+                video.append(Row(label: "Dolby Vision", value: String(localized: "Profile \(engineDolbyVisionProfile)")))
+                if let enhancementLayer { video.append(Row(label: String(localized: "Enhancement Layer"), value: enhancementLayer.title)) }
+                if let dolbyVision { video.append(Row(label: String(localized: "Playing As"), value: dolbyVision.title)) }
+            }
         }
         if let media {
             if let width = media.width, let height = media.height {

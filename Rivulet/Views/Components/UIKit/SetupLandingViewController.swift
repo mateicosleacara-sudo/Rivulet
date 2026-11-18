@@ -213,7 +213,8 @@ final class SetupLandingViewController: UIViewController {
         Self.setDone(embyCard, prompt: String(localized: "Sign In"), detail: EmbySession.account?.serverName)
         Self.setDone(liveTVCard, prompt: String(localized: "Add a Source"), detail: liveTVDetail)
         // Held in place while hidden, so nothing moves when it appears.
-        doneButton.isEnabled = Self.hasAnySource
+        // Personal build: always offered, since streams sent from Stremio need no server.
+        doneButton.isEnabled = true
         doneButton.alpha = doneButton.isEnabled ? 1 : 0
         doneGuide.isEnabled = doneButton.isEnabled
     }

@@ -1939,7 +1939,9 @@ class PlayerContainerViewController: UIViewController {
                                                            dolbyVision: vm.aetherPlayer?.dolbyVisionPlayback,
                                                            enhancementLayer: vm.aetherPlayer?.dolbyVisionEnhancementLayer,
                                                            enhanceDialogue: SystemAudioAdjustment.dialogueSummary,
-                                                           upscale: vm.aetherPlayer?.upscaleSummary),
+                                                           upscale: vm.aetherPlayer?.upscaleSummary,
+                                                           engineCodec: vm.aetherPlayer?.sourceVideoCodecName,
+                                                           engineDolbyVisionProfile: vm.aetherPlayer?.sourceDolbyVisionProfile),
                 statsProvider: statsProvider)
             return (details, nil)
         }

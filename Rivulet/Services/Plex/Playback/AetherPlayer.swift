@@ -795,6 +795,9 @@ final class AetherPlayer: PlayerProtocol {
     private(set) var dolbyVisionEnhancementLayer: DolbyVisionLayerType?
     private var enhancementLayerURL: URL?
     var sourceVideoCodecName: String? { engine.sourceVideoCodecName }
+    /// The source's Dolby Vision profile as the engine read it; nil when not DV. For streams
+    /// with no server metadata (a link from another app), where the Details tab has nothing else.
+    var sourceDolbyVisionProfile: Int? { engine.sourceDVProfile }
     /// "720p → 1080p (ML)" while the upscale stage runs; nil when it never started.
     var upscaleSummary: String? {
         guard let status = engine.activeUpscale else { return nil }
