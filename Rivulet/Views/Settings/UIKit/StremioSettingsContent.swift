@@ -9,6 +9,7 @@
 //  in: the account, its addons, Refresh Addons and Sign Out.
 //
 
+import Combine
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
