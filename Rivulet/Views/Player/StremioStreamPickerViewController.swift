@@ -74,8 +74,8 @@ final class StremioStreamPickerViewController: UIViewController {
 
         for table in [addonTable, streamTable] {
             table.backgroundColor = .clear
-            table.rowHeight = UITableView.automaticDimension
-            table.estimatedRowHeight = 120
+            // Heights are measured exactly (`heightForRowAt`): estimated multi-line rows overlapped on focus.
+            table.estimatedRowHeight = 0
             table.remembersLastFocusedIndexPath = true
             table.dataSource = self
             table.delegate = self
@@ -210,6 +210,16 @@ final class StremioStreamPickerViewController: UIViewController {
         streamTable.isHidden ? [cancelButton] : [streamTable]
     }
 
+    private var laidOutWidth: CGFloat = 0
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // Row heights depend on the list's width, known only now.
+        guard streamTable.bounds.width != laidOutWidth else { return }
+        laidOutWidth = streamTable.bounds.width
+        streamTable.reloadData()
+    }
+
     // MARK: - Menu
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
@@ -240,6 +250,11 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
         let cell = tableView.dequeueReusableCell(withIdentifier: StremioStreamCell.id, for: indexPath) as! StremioStreamCell
         cell.configure(visibleOptions[indexPath.row])
         return cell
+    }
+
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        if tableView === addonTable { return 100 }
+        return StremioStreamCell.height(for: visibleOptions[indexPath.row], width: tableView.bounds.width)
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -296,7 +311,8 @@ private class StremioGlassCell: UITableViewCell {
         coordinator.addCoordinatedAnimations { [self] in
             platter.backgroundColor = UIColor.white.withAlphaComponent(isFocused ? 0.22 : 0.08)
             platter.layer.borderColor = UIColor.white.withAlphaComponent(isFocused ? 0.3 : 0.08).cgColor
-            transform = isFocused ? CGAffineTransform(scaleX: 1.02, y: 1.02) : .identity
+            // The card, not the row: a scaled row drew over its neighbours.
+            platter.transform = isFocused ? CGAffineTransform(scaleX: 1.015, y: 1.015) : .identity
         }
     }
 }
@@ -345,12 +361,38 @@ private final class StremioStreamCell: StremioGlassCell {
     private let nameLabel = UILabel()
     private let descriptionLabel = UILabel()
 
+    static let nameFont = UIFont.systemFont(ofSize: 26, weight: .bold)
+    static let descriptionFont = UIFont.systemFont(ofSize: 24, weight: .regular)
+    static let nameWidth: CGFloat = 250
+    /// Row inset 8 + card padding 26 on each side, and 28 between the two columns.
+    static let horizontalChrome: CGFloat = 8 * 2 + 26 * 2 + 28
+    /// Card padding 22 top and bottom, plus 6 of row inset each way.
+    static let verticalChrome: CGFloat = 22 * 2 + 6 * 2
+
+    static func nameText(_ option: StremioStreamOption) -> String { option.stream.name ?? option.addonName }
+    static func descriptionText(_ option: StremioStreamOption) -> String {
+        option.stream.description ?? option.stream.filename ?? option.source.fileName ?? ""
+    }
+
+    /// The row's exact height for this list width: the taller of its two columns.
+    static func height(for option: StremioStreamOption, width: CGFloat) -> CGFloat {
+        let descriptionWidth = max(200, width - horizontalChrome - nameWidth)
+        func measure(_ text: String, _ font: UIFont, _ width: CGFloat) -> CGFloat {
+            ceil((text as NSString).boundingRect(
+                with: CGSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil).height)
+        }
+        let columns = max(measure(nameText(option), nameFont, nameWidth),
+                          measure(descriptionText(option), descriptionFont, descriptionWidth))
+        return max(100, columns + verticalChrome + 4)
+    }
+
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
-        nameLabel.font = .systemFont(ofSize: 26, weight: .bold)
+        nameLabel.font = Self.nameFont
         nameLabel.textColor = .white
         nameLabel.numberOfLines = 0
-        descriptionLabel.font = .systemFont(ofSize: 24, weight: .regular)
+        descriptionLabel.font = Self.descriptionFont
         descriptionLabel.textColor = UIColor.white.withAlphaComponent(0.85)
         descriptionLabel.numberOfLines = 0
         nameLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -360,12 +402,12 @@ private final class StremioStreamCell: StremioGlassCell {
         NSLayoutConstraint.activate([
             nameLabel.topAnchor.constraint(equalTo: platter.topAnchor, constant: 22),
             nameLabel.leadingAnchor.constraint(equalTo: platter.leadingAnchor, constant: 26),
-            nameLabel.widthAnchor.constraint(equalToConstant: 250),
+            nameLabel.widthAnchor.constraint(equalToConstant: Self.nameWidth),
             nameLabel.bottomAnchor.constraint(lessThanOrEqualTo: platter.bottomAnchor, constant: -22),
             descriptionLabel.topAnchor.constraint(equalTo: platter.topAnchor, constant: 22),
             descriptionLabel.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 28),
             descriptionLabel.trailingAnchor.constraint(equalTo: platter.trailingAnchor, constant: -26),
-            descriptionLabel.bottomAnchor.constraint(equalTo: platter.bottomAnchor, constant: -22),
+            descriptionLabel.bottomAnchor.constraint(lessThanOrEqualTo: platter.bottomAnchor, constant: -22),
         ])
     }
 
@@ -374,8 +416,8 @@ private final class StremioStreamCell: StremioGlassCell {
 
     /// The addon's own words: its label on the left, its description (file, size, quality) on the right.
     func configure(_ option: StremioStreamOption) {
-        nameLabel.text = option.stream.name ?? option.addonName
-        descriptionLabel.text = option.stream.description ?? option.stream.filename ?? option.source.fileName ?? ""
+        nameLabel.text = Self.nameText(option)
+        descriptionLabel.text = Self.descriptionText(option)
         contentView.alpha = option.isUncached ? 0.55 : 1
     }
 }

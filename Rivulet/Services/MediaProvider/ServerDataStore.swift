@@ -98,6 +98,7 @@ final class ServerDataStore: ObservableObject {
                     let id = Self.rowID(providerID, "\(library.id).recentlyAdded")
                     return homeRows.first { $0.id == id }
                 }
+                + homeRows.filter { $0.providerID == providerID && $0.id.hasSuffix(Self.extraRowSuffix) }
         }
     }
 
@@ -105,6 +106,9 @@ final class ServerDataStore: ObservableObject {
     /// Settings > Home Rows. Home's empty check reads this too, so a Home
     /// whose only rows are hidden takes the empty state rather than drawing
     /// nothing.
+    /// Rows a server adds beyond its libraries' (Stremio's catalogs behind "Catalogs").
+    static let extraRowSuffix = ".stremioRow"
+
     var visibleHomeRows: CachedHomeRail {
         homeRowsInSidebarOrder.filter { !HomeRowSettings.isHidden($0.hubIdentifier) }
     }
@@ -214,6 +218,14 @@ final class ServerDataStore: ObservableObject {
                 // This library's fetch failed: keep its row.
                 let id = Self.rowID(provider.id, "\(library.id).recentlyAdded")
                 if let previous = previous.rows.first(where: { $0.id == id }) { recent.append(previous) }
+            }
+        }
+        // Stremio keeps most catalogs behind one "Catalogs" library; each still gets a Home row.
+        if provider.kind == .stremio {
+            do {
+                recent += try await provider.hubs().map(Self.row)
+            } catch {
+                recent += previous.rows.filter { $0.id.hasSuffix(Self.extraRowSuffix) }
             }
         }
         var continuingRow: [CachedHomeHub] = []

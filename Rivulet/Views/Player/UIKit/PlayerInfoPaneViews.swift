@@ -944,9 +944,10 @@ final class PlayerDetailsPaneView: UIView {
             if let title = stream.displayTitle ?? stream.extendedDisplayTitle {
                 video.append(Row(label: String(localized: "Format"), value: title))
             }
-            if stream.isDolbyVision {
-                var profile = String(localized: "Profile \(stream.DOVIProfile ?? 0)")
-                if let compat = stream.DOVIBLCompatID { profile += " (CompatID \(compat))" }
+            if stream.isDolbyVision || engineDolbyVisionProfile != nil {
+                // The engine read the file itself; a server's (or an addon's) description is second best.
+                var profile = String(localized: "Profile \(engineDolbyVisionProfile ?? stream.DOVIProfile ?? 0)")
+                if engineDolbyVisionProfile == nil, let compat = stream.DOVIBLCompatID { profile += " (CompatID \(compat))" }
                 video.append(Row(label: "Dolby Vision", value: profile))
                 if let enhancementLayer { video.append(Row(label: String(localized: "Enhancement Layer"), value: enhancementLayer.title)) }
                 if let dolbyVision { video.append(Row(label: String(localized: "Playing As"), value: dolbyVision.title)) }

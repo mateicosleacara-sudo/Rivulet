@@ -76,7 +76,26 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
 
     // MARK: - Libraries and Home rows
 
+    /// The sidebar: the first catalog (Cinemeta's Popular Movies) on its own, and every other
+    /// catalog behind one "Catalogs" library, so the sidebar stays short. Home still gets a row
+    /// per catalog (`hubs()`, which `ServerDataStore` adds for Stremio).
     func libraries() async throws -> [MediaLibrary] {
+        let all = try await catalogLibraries()
+        guard let first = Self.leadCatalog(all) else { return [] }
+        let catalogs = MediaLibrary(id: Self.catalogsLibraryID, providerID: id,
+                                    title: String(localized: "Catalogs"), kind: .mixed)
+        return all.count > 1 ? [first, catalogs] : [first]
+    }
+
+    nonisolated static let catalogsLibraryID = "stremio~catalogs"
+
+    /// Cinemeta's Popular Movies when it is installed, else the first catalog.
+    static func leadCatalog(_ all: [MediaLibrary]) -> MediaLibrary? {
+        all.first { $0.id == "com.linvo.cinemeta~movie~top" } ?? all.first
+    }
+
+    /// Every catalog that can be listed with no extra, in addon order.
+    func catalogLibraries() async throws -> [MediaLibrary] {
         let installed = try await self.addons()
         var seen = Set<String>()
         return installed.flatMap { addon in
@@ -87,6 +106,48 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
                                     kind: Self.libraryKind(catalog.type))
             }
         }
+    }
+
+    /// The catalogs behind "Catalogs": all but the lead one.
+    private func folderCatalogs() async throws -> [MediaLibrary] {
+        let all = try await catalogLibraries()
+        let lead = Self.leadCatalog(all)
+        return all.filter { $0.id != lead?.id }
+    }
+
+    /// One row per catalog behind "Catalogs", first page each, fetched at once and kept 10 minutes.
+    private let hubCache = StremioCache<[MediaHub]>(lifetime: 600)
+
+    private func catalogHubs() async throws -> [MediaHub] {
+        let catalogs = try await folderCatalogs()
+        let hubs = await hubCache.value(for: "catalogs") { [weak self] in
+            guard let self else { return nil }
+            let fetched = await withTaskGroup(of: (Int, MediaHub?).self) { group in
+                for (index, library) in catalogs.enumerated() {
+                    group.addTask {
+                        guard let hub = try? await self.recentlyAddedHub(in: library) else { return (index, nil) }
+                        return (index, MediaHub(id: "\(library.id).stremioRow", providerID: hub.providerID,
+                                                title: hub.title, style: .shelf, items: hub.items))
+                    }
+                }
+                var all: [(Int, MediaHub?)] = []
+                for await result in group { all.append(result) }
+                return all.sorted { $0.0 < $1.0 }.compactMap(\.1)
+            }
+            return fetched.isEmpty ? nil : fetched
+        }
+        return hubs ?? []
+    }
+
+    /// A catalog as a tile in the Catalogs grid; opening it lists the catalog.
+    private func catalogTile(_ library: MediaLibrary, art: MediaItem?) -> MediaItem {
+        MediaItem(
+            ref: MediaItemRef(providerID: id, itemID: "c~" + library.id), kind: .collection,
+            title: library.title, sortTitle: nil, overview: nil, year: nil, runtime: nil,
+            parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil, childProgress: nil,
+            userState: MediaUserState(isPlayed: false, viewOffset: 0, isFavorite: false, lastViewedAt: nil),
+            artwork: MediaArtwork(poster: art?.artwork.poster, backdrop: art?.artwork.backdrop, thumbnail: nil, logo: nil),
+            parentArtwork: nil, grandparentArtwork: nil, libraryID: Self.catalogsLibraryID)
     }
 
     static func libraryTitle(_ catalog: StremioManifest.Catalog, addon: StremioAddon) -> String {
@@ -118,6 +179,15 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     /// Fills the page even when the addon's own pages are shorter (Cinemeta's are 50 or 100),
     /// asking with skip = what it has handed out so far.
     func items(in library: MediaLibrary, sort: SortOption, page: Page) async throws -> PagedResult<MediaItem> {
+        if library.id == Self.catalogsLibraryID {
+            guard page.offset == 0 else { return PagedResult(items: [], total: 0, nextPage: nil) }
+            let catalogs = try await folderCatalogs()
+            let hubs = (try? await catalogHubs()) ?? []
+            let tiles = catalogs.map { library in
+                catalogTile(library, art: hubs.first { $0.id == "\(library.id).stremioRow" }?.items.first)
+            }
+            return PagedResult(items: tiles, total: tiles.count, nextPage: nil)
+        }
         let (addon, catalog) = try await catalog(for: library)
         var collected: [MediaItem] = []
         var skip = page.offset
@@ -137,17 +207,23 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
 
     func recentlyAddedHub(in library: MediaLibrary) async throws -> MediaHub? {
+        guard library.id != Self.catalogsLibraryID else { return nil }
         let (addon, catalog) = try await catalog(for: library)
         let response: StremioCatalogResponse = try await StremioClient.resource(
             addon, resource: "catalog", type: catalog.type, id: catalog.id)
         let items = response.metas.prefix(30).map { item(from: $0, libraryID: library.id) }
         guard !items.isEmpty else { return nil }
-        return MediaHub(id: "\(library.id).catalog", providerID: id, title: library.title, style: .shelf, items: Array(items))
+        // "<library>.recentlyAdded" is the id ServerDataStore files a library's Home row under.
+        return MediaHub(id: "\(library.id).recentlyAdded", providerID: id, title: library.title, style: .shelf,
+                        items: Array(items))
     }
 
-    func hubs() async throws -> [MediaHub] { [] }
+    /// Home's rows beyond the libraries': one per catalog behind "Catalogs".
+    func hubs() async throws -> [MediaHub] { try await catalogHubs() }
+    /// A library page's rows: every catalog on the Catalogs page, the catalog itself elsewhere.
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] {
-        try await recentlyAddedHub(in: library).map { [$0] } ?? []
+        if library.id == Self.catalogsLibraryID { return try await catalogHubs() }
+        return try await recentlyAddedHub(in: library).map { [$0] } ?? []
     }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { [] }
 
@@ -191,7 +267,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
             releaseDate: nil, contentRating: nil, runtime: preview.runtimeSeconds,
             parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil, childProgress: nil,
             userState: state,
-            artwork: MediaArtwork(poster: preview.poster, backdrop: preview.background, thumbnail: nil, logo: preview.logo),
+            artwork: MediaArtwork(poster: StremioImages.poster(preview.poster), backdrop: StremioImages.backdrop(preview.background),
+                                  thumbnail: nil, logo: StremioImages.logo(preview.logo)),
             parentArtwork: nil, grandparentArtwork: nil,
             genres: preview.genres.isEmpty ? nil : preview.genres,
             externalIDs: preview.id.hasPrefix("tt") ? ["imdb": preview.id] : nil,
@@ -243,8 +320,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
                 seriesTitle: meta.preview.name,
                 episodeNumber: video.episode ?? index + 1, seasonNumber: seasonNumber, childProgress: nil,
                 userState: StremioWatchStore.state(for: itemRef),
-                artwork: MediaArtwork(poster: nil, backdrop: video.thumbnail ?? meta.preview.background,
-                                      thumbnail: video.thumbnail, logo: nil),
+                artwork: MediaArtwork(poster: nil, backdrop: StremioImages.backdrop(video.thumbnail ?? meta.preview.background),
+                                      thumbnail: StremioImages.backdrop(video.thumbnail), logo: nil),
                 parentArtwork: show.artwork, grandparentArtwork: show.artwork,
                 externalIDs: show.externalIDs)
         }
@@ -270,6 +347,11 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
 
     func children(of itemRef: MediaItemRef) async throws -> [MediaItem] {
+        if itemRef.itemID.hasPrefix("c~") {
+            let libraryID = String(itemRef.itemID.dropFirst(2))
+            guard let library = try await catalogLibraries().first(where: { $0.id == libraryID }) else { return [] }
+            return try await items(in: library, sort: .titleAsc, page: Page(offset: 0, limit: 100)).items
+        }
         guard let ref = StremioRef(itemRef.itemID) else { return [] }
         switch ref.kind {
         case .series:
@@ -369,8 +451,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         guard let ref = StremioRef(itemRef.itemID), ref.kind == .movie || ref.kind == .episode else {
             throw MediaProviderError.notPlayable
         }
-        let detailItem = try await fullDetail(for: itemRef).item
-        let options = try await streamOptions(type: ref.type, id: ref.streamID, runtime: detailItem.runtime)
+        let runtime = await watchItem(for: itemRef)?.runtime
+        let options = try await streamOptions(type: ref.type, id: ref.streamID, runtime: runtime)
         let chosen = sourceID.flatMap { id in options.first { $0.id == id } }
             ?? VersionRanking.choose(.best, from: StremioStreamParser.playable(options).map(\.source))
                 .flatMap { best in options.first { $0.id == best.id } }
@@ -428,14 +510,26 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
 
     // MARK: - Watch state (this Apple TV only, by choice: nothing goes to Stremio or Trakt)
 
+    /// The movie or episode as Continue Watching keeps it, from the meta alone: no stream fetch,
+    /// so a slow or failing addon can't leave a saved position without its title.
+    func watchItem(for itemRef: MediaItemRef) async -> MediaItem? {
+        guard let ref = StremioRef(itemRef.itemID),
+              let meta = try? await self.meta(type: ref.type, id: ref.metaID) else { return nil }
+        switch ref.kind {
+        case .movie: return item(from: meta.preview, libraryID: nil)
+        case .episode: return episodes(of: meta, ref: ref, season: nil).first { $0.ref == itemRef }
+        case .series, .season: return nil
+        }
+    }
+
     func progressReporter(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?) -> any ProgressReporter {
         StremioProgressReporter(providerID: id, itemRef: itemRef, item: { [weak self] in
-            try? await self?.fullDetail(for: itemRef).item
+            await self?.watchItem(for: itemRef)
         })
     }
 
     func markPlayed(_ itemRef: MediaItemRef) async throws {
-        let item = try? await fullDetail(for: itemRef).item
+        let item = await watchItem(for: itemRef)
         StremioWatchStore.markPlayed(itemRef, item: item, played: true)
     }
 
@@ -444,7 +538,7 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
 
     func updateProgress(_ itemRef: MediaItemRef, position: TimeInterval) async throws {
-        let item = try? await fullDetail(for: itemRef).item
+        let item = await watchItem(for: itemRef)
         StremioWatchStore.save(itemRef, position: position, item: item)
     }
 
