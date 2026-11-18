@@ -19,7 +19,6 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>rivulet</string>
-				<string>infuse</string>
 			</array>
 		</dict>
 	</array>
