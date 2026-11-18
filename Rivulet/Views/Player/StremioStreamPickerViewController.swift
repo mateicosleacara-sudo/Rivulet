@@ -74,7 +74,6 @@ final class StremioStreamPickerViewController: UIViewController {
 
         for table in [addonTable, streamTable] {
             table.backgroundColor = .clear
-            table.separatorStyle = .none
             table.rowHeight = UITableView.automaticDimension
             table.estimatedRowHeight = 120
             table.remembersLastFocusedIndexPath = true
