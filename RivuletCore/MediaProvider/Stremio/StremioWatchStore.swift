@@ -5,8 +5,8 @@
 //  Rivulet
 //
 //  Watch state for Stremio titles kept on this device: resume points, watched
-//  marks, Continue Watching and the next episode of a show. It is the local
-//  record the Stremio library and Trakt sync build on.
+//  marks, Continue Watching and the next episode of a show. Deliberately local:
+//  nothing is written to the Stremio library or to Trakt.
 //
 
 import Foundation

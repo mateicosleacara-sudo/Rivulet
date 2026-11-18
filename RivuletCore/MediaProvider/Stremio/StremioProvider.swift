@@ -423,7 +423,7 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         return tracks
     }
 
-    // MARK: - Watch state (on this device; the Stremio library sync comes next)
+    // MARK: - Watch state (this Apple TV only, by choice: nothing goes to Stremio or Trakt)
 
     func progressReporter(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?) -> any ProgressReporter {
         StremioProgressReporter(providerID: id, itemRef: itemRef, item: { [weak self] in
