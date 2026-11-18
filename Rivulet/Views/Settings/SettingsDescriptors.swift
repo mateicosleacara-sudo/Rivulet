@@ -260,6 +260,38 @@ enum SettingsDescriptorStore {
             icon: "sparkles.tv",
             description: "Sharpens SD and 720p video with Apple's machine learning upscaler. Uses more power, and stops if the Apple TV can't keep up. HDR, Dolby Vision and Live TV are not changed."
         ),
+        "stremioServer": SettingDescriptor(
+            icon: "play.square.stack.fill",
+            description: "Your Stremio account. Its addons, debrid keys included, supply the catalogs, details and streams Rivulet plays."
+        ),
+        "stremioLinkSignIn": SettingDescriptor(
+            icon: "qrcode",
+            description: "Shows a code to approve on your phone or computer. Works for accounts made with Google or Facebook too."
+        ),
+        "stremioEmail": SettingDescriptor(
+            icon: "envelope",
+            description: "The email of your Stremio account."
+        ),
+        "stremioPassword": SettingDescriptor(
+            icon: "key.fill",
+            description: "The password of your Stremio account. It is used once to sign in and never stored."
+        ),
+        "stremioSignIn": SettingDescriptor(
+            icon: "person.crop.circle.badge.checkmark",
+            description: "Signs in with the email and password above."
+        ),
+        "stremioAccountInfo": SettingDescriptor(
+            icon: "person.crop.circle",
+            description: "The Stremio account Rivulet uses."
+        ),
+        "stremioRefresh": SettingDescriptor(
+            icon: "arrow.clockwise",
+            description: "Loads your addons again, after you install, remove or reconfigure one in Stremio."
+        ),
+        "stremioSignOut": SettingDescriptor(
+            icon: "rectangle.portrait.and.arrow.right",
+            description: "Signs this Apple TV out of Stremio. Progress saved here stays."
+        ),
         "externalStreamDebug": SettingDescriptor(
             icon: "link",
             description: "Shows each stream link another app sends, such as Stremio, before it plays, with the stream, file name and subtitles Rivulet read from it."
@@ -695,6 +727,7 @@ enum SettingsDescriptorStore {
         case .plexServerDetail: return ("server.rack", .systemOrange)
         case .jellyfin: return ("server.rack", .systemPurple)
         case .emby: return ("server.rack", .systemGreen)
+        case .stremio: return ("play.square.stack.fill", .systemIndigo)
         case .iptv: return ("tv.and.mediabox", .systemBlue)
         case .libraries: return ("sidebar.squares.left", .systemPurple)
         case .homeRows: return ("rectangle.grid.1x2", .systemTeal)

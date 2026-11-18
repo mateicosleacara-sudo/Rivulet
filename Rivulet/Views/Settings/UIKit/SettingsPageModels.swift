@@ -224,6 +224,7 @@ enum SettingsContent {
         case .plexServerDetail: return plexServerDetail
         case .jellyfin:    return jellyfin
         case .emby:        return emby
+        case .stremio:     return stremio
         case .libraries:   return libraries
         case .homeRows:    return homeRows
         case .cache:       return cache
@@ -851,6 +852,11 @@ enum SettingsContent {
                 id: "embyServer", title: "Emby Server",
                 kind: .navigationAction(.emby,
                                         value: { EmbySession.account?.serverName ?? "" },
+                                        prepare: { addSourceDraft = AddSourceDraft() })),
+            SettingsRowItem(
+                id: "stremioServer", title: "Stremio",
+                kind: .navigationAction(.stremio,
+                                        value: { StremioSession.account?.email ?? "" },
                                         prepare: { addSourceDraft = AddSourceDraft() }))
         ]
     }

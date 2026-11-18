@@ -13,7 +13,7 @@ final class SetupLandingViewController: UIViewController {
     /// Plex, Jellyfin, Emby, or a Live TV source the user added (not one that follows a server).
     static var hasAnySource: Bool {
         PlexAuthManager.shared.hasCredentials || JellyfinSession.account != nil
-            || EmbySession.account != nil || !addedLiveTVSources.isEmpty
+            || EmbySession.account != nil || StremioSession.account != nil || !addedLiveTVSources.isEmpty
     }
 
     private static var addedLiveTVSources: [LiveTVDataStore.LiveTVSourceInfo] {

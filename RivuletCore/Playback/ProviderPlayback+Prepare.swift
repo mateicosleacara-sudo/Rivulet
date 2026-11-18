@@ -37,6 +37,15 @@ extension ProviderPlayback {
             stream = try await provider.resolveStream(for: item.ref, sourceID: sourceID)
             detail = try await fetched
         }
+        // A Stremio stream is a file on a debrid host picked by hand: no transcode to fall back
+        // to, and an Auto probe would download part of it just to measure the line.
+        if provider.kind == .stremio {
+            let extras = awaitingExtras
+                ? await provider.playbackExtras(for: item.ref, sourceID: stream.source.id) : PlaybackExtras()
+            var prepared = ProviderPlayback(provider: provider, item: item, detail: detail, stream: stream, extras: extras)
+            prepared.extrasPending = !awaitingExtras
+            return prepared
+        }
         let decided = await decideQuality(quality, version: version, stream: stream,
                                           sources: detail.mediaSources, throughput: throughput)
         var settled = decided.quality

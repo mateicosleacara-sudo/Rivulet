@@ -35,7 +35,7 @@ struct OtherServerKind {
     let failureMessage: (Error) -> String
     let quickConnectFailureMessage: (Error) -> String
 
-    static let all: [OtherServerKind] = [.jellyfin, .emby]
+    static let all: [OtherServerKind] = [.jellyfin, .emby, .stremio]
 
     static func entry(for kind: MediaProviderKind) -> OtherServerKind? {
         all.first { $0.kind == kind }
@@ -69,5 +69,22 @@ struct OtherServerKind {
         signOut: { await EmbySession.signOut(scope: $0) },
         failureMessage: EmbySession.failureMessage,
         quickConnectFailureMessage: EmbySession.failureMessage
+    )
+
+    /// A Stremio account: its addons are the "server". The address is not used; the code
+    /// sign-in is Stremio's TV link code. No music and no Live TV.
+    static let stremio = OtherServerKind(
+        kind: .stremio,
+        account: { StremioSession.account.map { ($0.providerID, $0.displayName) } },
+        storedProvider: { StremioSession.storedProvider() },
+        storedMusicProvider: { nil },
+        isSameMusicAccount: { _, _ in false },
+        syncLiveTV: { _ in },
+        userName: { StremioSession.account?.email },
+        signIn: { _, email, password in try await StremioSession.signIn(email: email, password: password) },
+        quickConnect: { _, showCode in try await StremioSession.signInWithLink { showCode($0.code) } },
+        signOut: { _ in await StremioSession.signOut() },
+        failureMessage: StremioSession.failureMessage,
+        quickConnectFailureMessage: StremioSession.failureMessage
     )
 }
