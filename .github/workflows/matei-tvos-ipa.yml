@@ -62,8 +62,13 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
             archive > "$RUNNER_TEMP/xcodebuild.log" 2>&1 || {
-              grep -n -B2 -A12 "error" "$RUNNER_TEMP/xcodebuild.log" | head -300
-              tail -60 "$RUNNER_TEMP/xcodebuild.log"
+              set +e +o pipefail
+              echo "=== compiler errors ==="
+              grep -E "(\.swift|\.m|\.c|\.cpp|\.h):[0-9]+:[0-9]+: error:" "$RUNNER_TEMP/xcodebuild.log" | sort -u | head -150
+              echo "=== other errors ==="
+              grep -E "^error:|: error:" "$RUNNER_TEMP/xcodebuild.log" | grep -v "\.swift:" | sort -u | head -40
+              echo "=== failed commands ==="
+              grep -A40 "The following build commands failed" "$RUNNER_TEMP/xcodebuild.log"
               exit 1
             }
           grep -E "\*\* ARCHIVE" "$RUNNER_TEMP/xcodebuild.log"
