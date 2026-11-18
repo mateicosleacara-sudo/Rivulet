@@ -56,8 +56,15 @@ final class SpeechModelStore: ObservableObject {
             .appendingPathComponent(folderName, isDirectory: true)
     }
 
+    /// Whether this build carries Apple-hosted asset packs. The personal sideloaded build
+    /// strips them (no extension, no App Group), and asking AssetPackManager then traps.
+    nonisolated private static var usesAssetPacks: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "BAAppGroupID") != nil
+    }
+
     /// The model folder inside the asset pack, when the pack is on the device.
     nonisolated private static var packDirectory: URL? {
+        guard usesAssetPacks else { return nil }
         guard let file = try? AssetPackManager.shared.url(for: FilePath("\(folderName)/config.json")) else { return nil }
         let folder = file.deletingLastPathComponent()
         return AsrModels.modelsExist(at: folder, version: version) ? folder : nil
@@ -122,6 +129,7 @@ final class SpeechModelStore: ObservableObject {
     }
 
     nonisolated private static func downloadPack(progress: @escaping @Sendable (Double) -> Void) async throws {
+        guard usesAssetPacks else { throw CocoaError(.featureUnsupported) }
         let manager = AssetPackManager.shared
         let pack = try await manager.assetPack(withID: assetPackID)
         let updates = Task {
