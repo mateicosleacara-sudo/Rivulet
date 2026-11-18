@@ -122,23 +122,18 @@ nonisolated enum StremioWatchStore {
     }
 }
 
-/// Saves the position the player reports (`PlaybackTimeline`: start, every 10 s, pause, stop)
-/// here and in the Stremio library.
+/// Saves the position the player reports (`PlaybackTimeline`: start, every 10 s, pause, stop).
 nonisolated struct StremioProgressReporter: ProgressReporter {
     let providerID: String
     let itemRef: MediaItemRef
     let item: @Sendable () async -> MediaItem?
-    /// item, position, force (pause and stop always write; progress at most every 30 s).
-    let sync: @Sendable (MediaItem?, TimeInterval, Bool) async -> Void
 
-    func start(position: TimeInterval) async throws { await save(position, force: true) }
-    func progress(position: TimeInterval) async { await save(position, force: false) }
-    func paused(at position: TimeInterval) async { await save(position, force: true) }
-    func stopped(at position: TimeInterval) async { await save(position, force: true) }
+    func start(position: TimeInterval) async throws { await save(position) }
+    func progress(position: TimeInterval) async { await save(position) }
+    func paused(at position: TimeInterval) async { await save(position) }
+    func stopped(at position: TimeInterval) async { await save(position) }
 
-    private func save(_ position: TimeInterval, force: Bool) async {
-        let item = await item()
-        StremioWatchStore.save(itemRef, position: position, item: item)
-        await sync(item, position, force)
+    private func save(_ position: TimeInterval) async {
+        StremioWatchStore.save(itemRef, position: position, item: await item())
     }
 }
