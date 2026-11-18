@@ -447,6 +447,38 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         return options ?? []
     }
 
+    /// The picker's fetch: `onUpdate` gets the list so far each time another addon answers,
+    /// in addon order, so streams show as they arrive instead of after the slowest addon.
+    /// A list already cached, or a fetch already running for this title (the detail page's), is used as is.
+    func streamOptions(type: String, id streamID: String, runtime: TimeInterval?,
+                       onUpdate: @escaping @MainActor ([StremioStreamOption]) -> Void) async throws -> [StremioStreamOption] {
+        let key = "\(type)~\(streamID)"
+        if let ready = await streamCache.existing(for: key) { return ready ?? [] }
+        let installed = try await self.addons().filter { $0.manifest.supports("stream", type: type, id: streamID) }
+        var byAddon: [Int: [(String, StremioStream)]] = [:]
+        await withTaskGroup(of: (Int, [(String, StremioStream)]).self) { group in
+            for (index, addon) in installed.enumerated() {
+                group.addTask {
+                    let response: StremioStreamResponse? = try? await StremioClient.resource(
+                        addon, resource: "stream", type: type, id: streamID, timeout: 15)
+                    return (index, (response?.streams ?? []).map { (addon.manifest.name, $0) })
+                }
+            }
+            for await (index, streams) in group {
+                byAddon[index] = streams
+                let sofar = byAddon.keys.sorted().flatMap { byAddon[$0] ?? [] }
+                let options = StremioStreamParser.options(from: sofar.map { (addon: $0.0, stream: $0.1) }, runtime: runtime)
+                // Cached as it grows, so a stream picked before the last addon answers starts at once.
+                if !options.isEmpty { await streamCache.store(options, for: key) }
+                await onUpdate(options)
+            }
+        }
+        let all = byAddon.keys.sorted().flatMap { byAddon[$0] ?? [] }
+        let options = StremioStreamParser.options(from: all.map { (addon: $0.0, stream: $0.1) }, runtime: runtime)
+        if !options.isEmpty { await streamCache.store(options, for: key) }
+        return options
+    }
+
     func resolveStream(for itemRef: MediaItemRef, sourceID: String?, maxBitrate: Int?) async throws -> StreamInfo {
         guard let ref = StremioRef(itemRef.itemID), ref.kind == .movie || ref.kind == .episode else {
             throw MediaProviderError.notPlayable
@@ -590,6 +622,18 @@ actor StremioCache<Value: Sendable> {
     private var inFlight: [String: Task<Value?, Never>] = [:]
 
     init(lifetime: TimeInterval) { self.lifetime = lifetime }
+
+    /// A fresh cached value, or a running fetch's result (awaited); nil when neither exists.
+    func existing(for key: String) async -> Value?? {
+        if let entry = entries[key], Date().timeIntervalSince(entry.at) < lifetime { return .some(entry.value) }
+        if let task = inFlight[key] { return .some(await task.value) }
+        return nil
+    }
+
+    func store(_ value: Value, for key: String) {
+        if entries.count > 200 { entries.removeAll() }
+        entries[key] = (value, Date())
+    }
 
     func value(for key: String, fetch: @escaping @Sendable () async -> Value?) async -> Value? {
         if let entry = entries[key], Date().timeIntervalSince(entry.at) < lifetime { return entry.value }

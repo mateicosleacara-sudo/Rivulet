@@ -43,8 +43,6 @@ enum StremioPlayFlow {
                 picker.setOptions([], preselect: nil)
                 return
             }
-            let options = (try? await provider.streamOptions(type: ref.type, id: ref.streamID, runtime: target.runtime)) ?? []
-            picker.setOptions(options, preselect: sourceID)
             let playTarget = target
             let playOffset = startOffset
 
@@ -73,6 +71,13 @@ enum StremioPlayFlow {
                     }
                 }
             }
+
+            // After onSelect is set: a stream can be picked before the slowest addon has answered.
+            // Each addon's streams show as soon as it answers; the slowest no longer holds up the rest.
+            let options = (try? await provider.streamOptions(
+                type: ref.type, id: ref.streamID, runtime: target.runtime,
+                onUpdate: { [weak picker] sofar in picker?.setOptions(sofar, preselect: sourceID, isLoading: true) })) ?? []
+            picker.setOptions(options, preselect: sourceID, isLoading: false)
         }
     }
 

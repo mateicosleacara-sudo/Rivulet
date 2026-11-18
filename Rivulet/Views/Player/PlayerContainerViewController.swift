@@ -1060,12 +1060,7 @@ class PlayerContainerViewController: UIViewController {
     @objc private func handleTouchSurfaceTap() {
         guard let vm = viewModel, touchSurfaceTapAllowed else { return }
 
-        // With the controls up, a bare tap (not a click) cycles the bar
-        // between play time and the clock.
-        if vm.showControls, !tapWasClick, let bar = progressBar {
-            bar.setShowsClockTimes(!bar.showsClockTimes)
-            SettingsStore.setBool(Self.clockTimesKey, bar.showsClockTimes)
-        }
+        // Personal build: a tap no longer switches the bar to clock times; it only shows the controls.
         vm.showControlsTemporarily()
     }
 
@@ -1147,7 +1142,8 @@ class PlayerContainerViewController: UIViewController {
 
     private func bindChrome(to vm: UniversalPlayerViewModel) {
         guard let rail, let bar = progressBar else { return }
-        bar.setShowsClockTimes(SettingsStore.bool(Self.clockTimesKey, default: false))
+        // Always play time (elapsed and remaining), whatever an earlier tap saved.
+        bar.setShowsClockTimes(false)
 
         // Static metadata (re-applied on episode advance via itemGeneration).
         applyRailMetadata(vm: vm)

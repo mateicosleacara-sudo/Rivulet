@@ -20,10 +20,25 @@ final class StremioStreamPickerViewController: UIViewController {
     var onCancel: (() -> Void)?
 
     private var options: [StremioStreamOption] = []
-    private var addons: [(name: String, count: Int)] = []
+    /// The left list: addons in `addonPriority` order, then All.
+    private var addons: [(name: String, count: Int, isAll: Bool)] = []
     private var selectedAddon: String?          // nil is All
+    /// Until the user picks an addon, the list follows the top one as addons arrive.
+    private var userChoseAddon = false
     private var isStarting = false
     private var preselectedID: String?
+    private var shownStreamIDs: [String] = []
+    private let moreLabel = UILabel()
+
+    /// Comet, Torrentio and SELection first, in that order; any other addon after them in its
+    /// Stremio order. Matched by name, so "Comet | ElfHosted | RD" counts as Comet.
+    static func addonPriority(_ name: String) -> Int {
+        let lower = name.lowercased()
+        if lower.contains("comet") { return 0 }
+        if lower.contains("torrentio") { return 1 }
+        if lower.contains("selection") { return 2 }
+        return 3
+    }
 
     private let backdrop = UIImageView()
     private let titleLabel = UILabel()
@@ -106,7 +121,11 @@ final class StremioStreamPickerViewController: UIViewController {
         statusStack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusStack)
 
-        let header = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel])
+        moreLabel.text = String(localized: "Loading more addons…")
+        moreLabel.font = .systemFont(ofSize: 22, weight: .medium)
+        moreLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        moreLabel.isHidden = true
+        let header = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel, moreLabel])
         header.axis = .vertical
         header.spacing = 6
         header.translatesAutoresizingMaskIntoConstraints = false
@@ -143,27 +162,52 @@ final class StremioStreamPickerViewController: UIViewController {
         subtitleLabel.isHidden = subtitle?.isEmpty ?? true
     }
 
-    /// The addons' answers, in their order. `preselect` is the version the detail page picked.
-    func setOptions(_ options: [StremioStreamOption], preselect: String?) {
+    /// The addons' answers so far. Called again as each addon answers (`isLoading` until the last);
+    /// `preselect` is the version the detail page picked.
+    func setOptions(_ options: [StremioStreamOption], preselect: String?, isLoading: Bool = false) {
         loadViewIfNeeded()
-        self.options = options
+        let wasEmpty = self.options.isEmpty
+        // Priority order, each addon's own stream order kept within it.
+        self.options = options.enumerated()
+            .sorted { (Self.addonPriority($0.element.addonName), $0.offset) < (Self.addonPriority($1.element.addonName), $1.offset) }
+            .map(\.element)
         preselectedID = preselect
         var counts: [String: Int] = [:]
         var order: [String] = []
-        for option in options {
+        for option in self.options {
             if counts[option.addonName] == nil { order.append(option.addonName) }
             counts[option.addonName, default: 0] += 1
         }
-        addons = [(String(localized: "All"), options.count)] + order.map { ($0, counts[$0] ?? 0) }
-        addonTable.reloadData()
-        streamTable.reloadData()
-        if options.isEmpty {
-            showStatus(String(localized: "No streams found. Your addons have nothing playable for this title yet."), spinning: false)
-        } else {
-            hideStatus()
+        let rows = order.map { (name: $0, count: counts[$0] ?? 0, isAll: false) }
+            + [(name: String(localized: "All"), count: self.options.count, isAll: true)]
+        if !userChoseAddon {
+            let preselected = preselect.flatMap { id in self.options.first { $0.id == id }?.addonName }
+            selectedAddon = preselected ?? order.first
         }
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
+        if rows.map(\.name) != addons.map(\.name) || rows.map(\.count) != addons.map(\.count) {
+            addons = rows
+            addonTable.reloadData()
+        }
+        // Only when what is shown changed, so focus in the list doesn't jump as other addons answer.
+        let ids = visibleOptions.map(\.id)
+        if ids != shownStreamIDs {
+            shownStreamIDs = ids
+            streamTable.reloadData()
+        }
+        moreLabel.isHidden = !isLoading || self.options.isEmpty
+        if self.options.isEmpty {
+            if isLoading {
+                showStatus(String(localized: "Finding streams…"), spinning: true)
+            } else {
+                showStatus(String(localized: "No streams found. Your addons have nothing playable for this title yet."), spinning: false)
+            }
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
+        } else if wasEmpty {
+            hideStatus()
+            setNeedsFocusUpdate()
+            updateFocusIfNeeded()
+        }
     }
 
     /// The picked stream is starting: hold every press until the player is up.
@@ -243,7 +287,7 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
         if tableView === addonTable {
             let cell = tableView.dequeueReusableCell(withIdentifier: StremioAddonCell.id, for: indexPath) as! StremioAddonCell
             let addon = addons[indexPath.row]
-            let isSelected = indexPath.row == 0 ? selectedAddon == nil : selectedAddon == addon.name
+            let isSelected = addon.isAll ? selectedAddon == nil : selectedAddon == addon.name
             cell.configure(name: addon.name, count: addon.count, isSelected: isSelected)
             return cell
         }
@@ -260,8 +304,10 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         guard !isStarting else { return }
         if tableView === addonTable {
-            selectedAddon = indexPath.row == 0 ? nil : addons[indexPath.row].name
+            userChoseAddon = true
+            selectedAddon = addons[indexPath.row].isAll ? nil : addons[indexPath.row].name
             addonTable.reloadData()
+            shownStreamIDs = visibleOptions.map(\.id)
             streamTable.reloadData()
             streamTable.setContentOffset(CGPoint(x: 0, y: -streamTable.contentInset.top), animated: false)
             return
