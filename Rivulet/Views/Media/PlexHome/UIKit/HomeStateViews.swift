@@ -15,6 +15,7 @@ final class HomeStateView: UIView {
 
     enum Kind {
         case notConnected               // "Connect to your Plex server in Settings."
+        case streamsOnly                // No server at all: streams arrive from Stremio.
         case loading                    // "Loading" + spinner
         case error(message: String)     // "Unable to Load" + retry
         // "No Content" + refresh. Carries its message because the surfaces do
@@ -25,6 +26,7 @@ final class HomeStateView: UIView {
         var iconSystemName: String? {
             switch self {
             case .notConnected: return "server.rack"
+            case .streamsOnly: return "play.tv"
             case .loading: return nil  // spinner instead
             case .error: return "exclamationmark.triangle"
             case .empty: return "film.stack"
@@ -34,6 +36,7 @@ final class HomeStateView: UIView {
         var title: String {
             switch self {
             case .notConnected: return String(localized: "Not Connected")
+            case .streamsOnly: return String(localized: "Ready to Play")
             case .loading: return String(localized: "Loading")
             case .error: return String(localized: "Unable to Load")
             case .empty: return String(localized: "No Content")
@@ -43,6 +46,7 @@ final class HomeStateView: UIView {
         var message: String? {
             switch self {
             case .notConnected: return String(localized: "Connect to your Plex server in Settings.")
+            case .streamsOnly: return String(localized: "Pick a movie or show in Stremio and it plays here.")
             case .loading: return nil
             case .error(let message): return message
             case .empty(let message): return message

@@ -65,8 +65,8 @@ final class ExternalStreamHandler {
         // Cold launch: the window and shell come up a moment after the URL arrives.
         guard waiter == nil else { return }
         waiter = Task { [weak self] in
-            for _ in 0..<120 {
-                try? await Task.sleep(for: .milliseconds(500))
+            for _ in 0..<300 {
+                try? await Task.sleep(for: .milliseconds(100))
                 guard let self, !Task.isCancelled else { return }
                 if Self.readyRoot() != nil {
                     self.waiter = nil
@@ -118,44 +118,52 @@ final class ExternalStreamHandler {
 
     private func prepare(_ link: ExternalStreamLink, from root: UIViewController) {
         guard ProviderPlayer.claimStart() else { return }
+        // Up at once, so nothing behind it (Home's placeholder) shows while the stream is looked up.
+        let cover = ExternalStreamLoadingViewController()
+        final class Cancel { var cancelled = false }
+        let cancel = Cancel()
+        cover.onCancel = { [weak cover] in
+            cancel.cancelled = true
+            if let cover { Self.close(cover) }
+        }
+        root.topmostPresented.present(cover, animated: false)
         Task { @MainActor in
+            defer { ProviderPlayer.finishStart() }
             let resolved = await ExternalStreamResolver.resolve(link.streamURL)
             let info = await ExternalStreamMetadata.info(link: link, resolved: resolved)
-            ProviderPlayer.finishStart()
+            guard !cancel.cancelled else { return }
             let provider = ExternalStreamProvider(link: link, resolved: resolved, info: info)
             DiagLog.notice(.deepLink, "External stream: matched=\(info.imdbID != nil) kind=\(info.kind.rawValue)")
             if let status = resolved.statusCode, status >= 400 {
                 DiagLog.error(.deepLink, "External stream answered HTTP \(status)")
                 presentNotice(title: String(localized: "Couldn't Play"),
                               message: String(localized: "The stream answered with error \(status). The link may have expired: try picking the stream again."),
-                              from: root)
+                              from: cover, onDone: { Self.close(cover) })
                 Self.open(link.errorURL)
                 return
             }
-            guard let resume = ExternalStreamResumeStore.resumePoint(for: provider.resumeKey) else {
-                return self.present(provider, startOffset: nil, from: root)
+            // The loading screen's backdrop and the Now Playing poster, as a server item has them.
+            async let art = Self.image(info.backdrop, full: true)
+            async let poster = Self.image(info.poster, full: false)
+            let (backdrop, thumb) = await (art, poster)
+            guard !cancel.cancelled else { return }
+            cover.show(title: info.seriesTitle ?? info.title, backdrop: backdrop)
+
+            let play: (TimeInterval?) -> Void = { [weak self] offset in
+                let viewModel = UniversalPlayerViewModel(providerPlayback: provider.playback, startOffset: offset,
+                                                         loadingArtImage: backdrop, loadingThumbImage: thumb)
+                self?.present(viewModel, provider: provider, over: cover)
             }
+            guard let resume = ExternalStreamResumeStore.resumePoint(for: provider.resumeKey) else { return play(nil) }
             let alert = UIAlertController(title: provider.displayTitle, message: nil, preferredStyle: .actionSheet)
             alert.addAction(UIAlertAction(
                 title: String(localized: "Resume from \(PlexMetadata.formatResumeTime(Int(resume * 1000)))"),
-                style: .default) { [weak self] _ in self?.present(provider, startOffset: resume, from: root) })
-            alert.addAction(UIAlertAction(title: String(localized: "Start from Beginning"), style: .default) { [weak self] _ in
-                self?.present(provider, startOffset: nil, from: root)
+                style: .default) { _ in play(resume) })
+            alert.addAction(UIAlertAction(title: String(localized: "Start from Beginning"), style: .default) { _ in
+                play(nil)
             })
-            alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
-            root.topmostPresented.present(alert, animated: true)
-        }
-    }
-
-    private func present(_ provider: ExternalStreamProvider, startOffset: TimeInterval?, from root: UIViewController) {
-        Task { @MainActor in
-            // The loading screen's backdrop and the Now Playing poster, as a server item has them.
-            async let art = Self.image(provider.info.backdrop, full: true)
-            async let poster = Self.image(provider.info.poster, full: false)
-            let (backdrop, thumb) = await (art, poster)
-            let viewModel = UniversalPlayerViewModel(providerPlayback: provider.playback, startOffset: startOffset,
-                                                     loadingArtImage: backdrop, loadingThumbImage: thumb)
-            self.present(viewModel, provider: provider, from: root)
+            alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { _ in Self.close(cover) })
+            cover.present(alert, animated: true)
         }
     }
 
@@ -165,7 +173,14 @@ final class ExternalStreamHandler {
         return await ImageCacheManager.shared.image(for: url)
     }
 
-    private func present(_ viewModel: UniversalPlayerViewModel, provider: ExternalStreamProvider, from root: UIViewController) {
+    /// Takes the cover down with anything still above it.
+    private static func close(_ cover: UIViewController) {
+        guard let presenter = cover.presentingViewController else { return }
+        presenter.dismiss(animated: true)
+    }
+
+    private func present(_ viewModel: UniversalPlayerViewModel, provider: ExternalStreamProvider,
+                         over cover: ExternalStreamLoadingViewController) {
         let link = provider.link
         let key = provider.resumeKey
         final class Flag { var played = false }
@@ -173,7 +188,7 @@ final class ExternalStreamHandler {
         let watch = viewModel.$playbackState.sink { state in
             if state == .playing { flag.played = true }
         }
-        PlayerPresenter.present(viewModel: viewModel, from: root) { [weak viewModel] in
+        PlayerPresenter.present(viewModel: viewModel, from: cover) { [weak viewModel] in
             watch.cancel()
             // The length is known only once playing; keep it so the resume prompt can tell
             // a finished title (past 90%) from one stopped partway.
@@ -187,6 +202,7 @@ final class ExternalStreamHandler {
                                                    duration: viewModel.duration, title: provider.displayTitle)
                 }
             }
+            Self.close(cover)
             Self.open(flag.played ? link.successURL : (link.errorURL ?? link.successURL))
         }
     }
@@ -198,10 +214,11 @@ final class ExternalStreamHandler {
         UIApplication.shared.open(url)
     }
 
-    private func presentNotice(title: String, message: String, from root: UIViewController) {
+    private func presentNotice(title: String, message: String, from root: UIViewController,
+                               onDone: @escaping () -> Void = {}) {
         let popup = ConfirmationPopupViewController(title: title, message: message,
                                                     confirmTitle: String(localized: "OK"), cancelTitle: nil,
-                                                    width: 1500, onConfirm: {})
+                                                    width: 1500, onConfirm: onDone, onCancel: onDone)
         root.topmostPresented.present(popup, animated: true)
     }
 

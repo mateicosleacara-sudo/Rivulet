@@ -2738,7 +2738,8 @@ final class PlexHomeViewController: UIViewController {
         stateViewHasFocusableAction = false
         var showsLoading = false
         if !hasCredentials {
-            stateView.configure(kind: .notConnected)
+            // Personal build: with no server of any kind, Rivulet is Stremio's player.
+            stateView.configure(kind: SetupLandingViewController.hasAnySource ? .notConnected : .streamsOnly)
             stateView.isHidden = false
             collectionView.isHidden = true
             backdropView.isHidden = true
