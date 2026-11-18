@@ -781,6 +781,7 @@ final class PlexHomeViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        updateSearchClip()
         // Diagnostic only — the embedded orthogonal scrollers are NOT
         // configured or driven in any way (the layout owns them and reverts
         // external writes; the shelf margin lives in the section contentInsets
@@ -2288,6 +2289,26 @@ final class PlexHomeViewController: UIViewController {
             backdropView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         backdropView.isHidden = !showHomeHero
+    }
+
+    /// Search sits beside the keyboard column, and rows are left unclipped so a focused tile can grow:
+    /// a row scrolled sideways drew its posters over the keyboard. Only the left edge is cut, so
+    /// focus growth above, below and at the right keeps its room.
+    private lazy var searchClipMask: CALayer = {
+        let mask = CALayer()
+        mask.backgroundColor = UIColor.black.cgColor
+        return mask
+    }()
+
+    private func updateSearchClip() {
+        guard case .search = mode else { return }
+        if collectionView.layer.mask == nil { collectionView.layer.mask = searchClipMask }
+        let bounds = collectionView.bounds
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        searchClipMask.frame = CGRect(x: bounds.minX, y: bounds.minY - 400,
+                                      width: bounds.width + 400, height: bounds.height + 800)
+        CATransaction.commit()
     }
 
     /// Top inset: 0 with the hero, otherwise room for the first row.
@@ -7666,6 +7687,7 @@ extension PlexHomeViewController: UICollectionViewDelegate {
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard scrollView === collectionView else { return }
+        updateSearchClip()
         let offset = scrollView.contentOffset.y
         let shelfTop = Self.heroBackdropFloor
         backdropView.applyScrollOffset(offset, shelfTop: shelfTop)

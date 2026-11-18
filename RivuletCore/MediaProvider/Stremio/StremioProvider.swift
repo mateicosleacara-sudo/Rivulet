@@ -143,6 +143,16 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         return hubs ?? []
     }
 
+    /// The Catalogs page's rows: Popular Movies, then the rest. Home keeps its own Popular Movies row
+    /// (the library's) and gets only the rest from `hubs()`, so it never shows it twice.
+    private func catalogsPageHubs() async -> [MediaHub] {
+        let rest = (try? await catalogHubs()) ?? []
+        guard let lead = Self.leadCatalog((try? await catalogLibraries()) ?? []),
+              let hub = try? await recentlyAddedHub(in: lead) else { return rest }
+        return [MediaHub(id: "\(lead.id).stremioRow", providerID: hub.providerID, title: hub.title,
+                         style: .shelf, items: hub.items)] + rest
+    }
+
     /// A catalog as a tile in the Catalogs grid; opening it lists the catalog.
     private func catalogTile(_ library: MediaLibrary, art: MediaItem?) -> MediaItem {
         MediaItem(
@@ -185,8 +195,9 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     func items(in library: MediaLibrary, sort: SortOption, page: Page) async throws -> PagedResult<MediaItem> {
         if library.id == Self.catalogsLibraryID {
             guard page.offset == 0 else { return PagedResult(items: [], total: 0, nextPage: nil) }
-            let catalogs = try await folderCatalogs()
-            let hubs = (try? await catalogHubs()) ?? []
+            // Every catalog, Popular Movies included (it also has its own sidebar entry).
+            let catalogs = try await catalogLibraries()
+            let hubs = await catalogsPageHubs()
             let tiles = catalogs.map { library in
                 catalogTile(library, art: hubs.first { $0.id == "\(library.id).stremioRow" }?.items.first)
             }
@@ -226,7 +237,7 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     func hubs() async throws -> [MediaHub] { try await catalogHubs() }
     /// A library page's rows: every catalog on the Catalogs page, the catalog itself elsewhere.
     func hubs(in library: MediaLibrary) async throws -> [MediaHub] {
-        if library.id == Self.catalogsLibraryID { return try await catalogHubs() }
+        if library.id == Self.catalogsLibraryID { return await catalogsPageHubs() }
         return try await recentlyAddedHub(in: library).map { [$0] } ?? []
     }
     func recentlyAdded(limit: Int) async throws -> [MediaItem] { [] }
@@ -272,27 +283,57 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         return next
     }
 
-    /// Every catalog that takes a search, merged in addon order.
+    /// Every catalog that takes a search, merged in addon order. A query with spaces is also asked
+    /// joined up ("back rooms" finds "Backrooms"), and titles that match the query letter for
+    /// letter (ignoring spaces and punctuation) come first; everything else keeps the addons' order.
     func search(_ query: String) async throws -> [MediaItem] {
         let installed = try await self.addons()
         let searches = installed.flatMap { addon in
             addon.manifest.catalogs.filter(\.supportsSearch).map { (addon, $0) }
         }
-        let results = await withTaskGroup(of: (Int, [StremioMetaPreview]).self) { group in
-            for (index, entry) in searches.enumerated() {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let joined = trimmed.replacingOccurrences(of: " ", with: "")
+        let queries = joined != trimmed && joined.count >= 3 ? [trimmed, joined] : [trimmed]
+        var requests: [(Int, Int, (StremioAddon, StremioManifest.Catalog), String)] = []
+        for (q, text) in queries.enumerated() {
+            for (index, entry) in searches.enumerated() { requests.append((q, index, entry, text)) }
+        }
+        let results = await withTaskGroup(of: (Int, Int, [StremioMetaPreview]).self) { group in
+            for (q, index, entry, text) in requests {
                 group.addTask {
                     let response: StremioCatalogResponse? = try? await StremioClient.resource(
                         entry.0, resource: "catalog", type: entry.1.type, id: entry.1.id,
-                        extra: [("search", query)], timeout: 12)
-                    return (index, response?.metas ?? [])
+                        extra: [("search", text)], timeout: 12)
+                    return (q, index, response?.metas ?? [])
                 }
             }
-            var all: [(Int, [StremioMetaPreview])] = []
+            var all: [(Int, Int, [StremioMetaPreview])] = []
             for await result in group { all.append(result) }
-            return all.sorted { $0.0 < $1.0 }.flatMap(\.1)
+            // The typed query's results first, each in addon order.
+            return all.sorted { ($0.0, $0.1) < ($1.0, $1.1) }.flatMap(\.2)
         }
         var seen = Set<String>()
-        return results.filter { seen.insert("\($0.type)~\($0.id)").inserted }.map { item(from: $0, libraryID: nil) }
+        let unique = results.filter { seen.insert("\($0.type)~\($0.id)").inserted }
+        let wanted = Self.searchKey(trimmed)
+        let ranked = unique.enumerated().sorted { a, b in
+            let (sa, sb) = (Self.matchScore(a.element.name, wanted), Self.matchScore(b.element.name, wanted))
+            return sa != sb ? sa < sb : a.offset < b.offset
+        }
+        return ranked.map { item(from: $0.element, libraryID: nil) }
+    }
+
+    /// Letters and digits only, lowercased: "Back Rooms" and "Backrooms" read the same.
+    static func searchKey(_ text: String) -> String {
+        String(text.lowercased().unicodeScalars.filter(CharacterSet.alphanumerics.contains).map(Character.init))
+    }
+
+    /// 0 the same title, 1 starts with the query, 2 anything else (kept in the addons' order).
+    static func matchScore(_ title: String, _ wanted: String) -> Int {
+        guard !wanted.isEmpty else { return 2 }
+        let key = searchKey(title)
+        if key == wanted { return 0 }
+        if key.hasPrefix(wanted) { return 1 }
+        return 2
     }
 
     // MARK: - Meta, seasons, episodes
