@@ -53,6 +53,13 @@ enum ProviderPlayer {
             onFailedToStart?()
             return
         }
+        // A Stremio title opens its stream picker at once (Stremio's own flow).
+        if let stremio = provider as? StremioProvider {
+            StremioPlayFlow.play(item, provider: stremio, fromBeginning: fromBeginning, sourceID: sourceID,
+                                 explicitStartOffset: explicitStartOffset, configure: configure,
+                                 from: presenter, onDismiss: onDismiss, onFailedToStart: onFailedToStart)
+            return
+        }
         guard claimStart() else { onFailedToStart?(); return }
         Task { @MainActor in
             defer { finishStart() }

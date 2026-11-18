@@ -2298,7 +2298,12 @@ final class PlexHomeViewController: UIViewController {
         // pill (#298); Search hides the pill instead.
         var noHeroTop = ShellPillMetrics.contentClearance
         if case .search = mode { noHeroTop = view.safeAreaInsets.top }
-        let topInset: CGFloat = showHomeHero ? 0 : noHeroTop
+        // A hero that has nothing to show (no Plex account: a Stremio-only Home) leaves the first
+        // row under the pill, so it gets the clearance too. With Plex the hero is on its way.
+        let heroSection = sectionsSnapshot.first(where: { $0.kind == .hero })
+        let heroHasItems = !heroItems.isEmpty || !(heroSection?.heroMediaItems.isEmpty ?? true)
+        let heroShowing = showHomeHero && (heroHasItems || authManager.hasCredentials)
+        let topInset: CGFloat = heroShowing ? 0 : noHeroTop
         if collectionView.contentInset.top != topInset {
             collectionView.contentInset.top = topInset
         }
@@ -3864,6 +3869,7 @@ final class PlexHomeViewController: UIViewController {
     }
 
     private func applySnapshot(animated: Bool) {
+        updateContentTopInset()
         // Main-thread timing: applySnapshot runs on every hubsVersion/state
         // change and builds the whole diffable snapshot. If this is the 10s
         // launch hitch, it surfaces here.

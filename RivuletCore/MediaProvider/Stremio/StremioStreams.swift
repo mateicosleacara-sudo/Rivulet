@@ -10,7 +10,8 @@
 //  what the picker's badges and `VersionRanking` (resolution, range, bitrate) use.
 //  Only streams with an http(s) URL play here: a torrent (infoHash only) needs a
 //  torrent engine. A debrid link not cached yet is hidden while any cached one
-//  exists, since it cannot start playing.
+//  exists in the detail page's versions, since it cannot start playing; the stream
+//  picker lists everything, as Stremio does.
 //
 
 import CryptoKit
@@ -40,8 +41,13 @@ nonisolated enum StremioStreamParser {
                                        source: source(id: id, stream: stream, url: url, text: text, runtime: runtime),
                                        isUncached: isUncached(text))
         }
-        let cached = all.filter { !$0.isUncached }
-        return cached.isEmpty ? all : cached
+        return all
+    }
+
+    /// The detail page's versions: the cached links when there are any (an uncached one can't start).
+    static func playable(_ options: [StremioStreamOption]) -> [StremioStreamOption] {
+        let cached = options.filter { !$0.isUncached }
+        return cached.isEmpty ? options : cached
     }
 
     /// Stable across fetches, so a version picked on the detail page is the one that plays.

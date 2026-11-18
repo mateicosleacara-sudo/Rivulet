@@ -303,7 +303,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         switch ref.kind {
         case .movie:
             item = show
-            sources = try await streamOptions(type: ref.type, id: ref.streamID, runtime: show.runtime).map(\.source)
+            sources = StremioStreamParser.playable(
+                try await streamOptions(type: ref.type, id: ref.streamID, runtime: show.runtime)).map(\.source)
         case .series:
             item = show
             nextEpisode = StremioWatchStore.nextEpisode(in: allEpisodesSorted(meta, ref: ref))
@@ -315,7 +316,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
                 throw MediaProviderError.notFound
             }
             item = episode
-            sources = try await streamOptions(type: ref.type, id: ref.streamID, runtime: episode.runtime).map(\.source)
+            sources = StremioStreamParser.playable(
+                try await streamOptions(type: ref.type, id: ref.streamID, runtime: episode.runtime)).map(\.source)
         }
         var detail = MediaItemDetail(
             item: item, tagline: nil, genres: meta.preview.genres, studios: [],
@@ -370,7 +372,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         let detailItem = try await fullDetail(for: itemRef).item
         let options = try await streamOptions(type: ref.type, id: ref.streamID, runtime: detailItem.runtime)
         let chosen = sourceID.flatMap { id in options.first { $0.id == id } }
-            ?? VersionRanking.choose(.best, from: options.map(\.source)).flatMap { best in options.first { $0.id == best.id } }
+            ?? VersionRanking.choose(.best, from: StremioStreamParser.playable(options).map(\.source))
+                .flatMap { best in options.first { $0.id == best.id } }
         guard let option = chosen else { throw MediaProviderError.notPlayable }
 
         async let resolved = ExternalStreamResolver.resolve(option.url)
