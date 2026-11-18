@@ -260,6 +260,14 @@ enum SettingsDescriptorStore {
             icon: "sparkles.tv",
             description: "Sharpens SD and 720p video with Apple's machine learning upscaler. Uses more power, and stops if the Apple TV can't keep up. HDR, Dolby Vision and Live TV are not changed."
         ),
+        "externalStreamDebug": SettingDescriptor(
+            icon: "link",
+            description: "Shows each stream link another app sends, such as Stremio, before it plays, with the stream, file name and subtitles Rivulet read from it."
+        ),
+        "externalStreamLast": SettingDescriptor(
+            icon: "link.badge.plus",
+            description: "The last stream link another app sent, exactly as it arrived. It can contain your add-on's access key, so don't share a photo of it."
+        ),
         "dolbyVisionFEL": SettingDescriptor(
             icon: "4k.tv",
             description: "Composes both layers of Dolby Vision Profile 7 FEL on a Dolby Vision TV. Plays without AirPlay or Picture in Picture, and E-AC3 Atmos loses its objects. Off folds the enhancement layer into 8.1."

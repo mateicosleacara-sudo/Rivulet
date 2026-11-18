@@ -37,7 +37,12 @@ final class DeepLinkHandler: ObservableObject {
     /// Set by the shell: true once the launch profile gate has passed, false
     /// while a profile picker or PIN prompt withholds content.
     var isShellReady = false {
-        didSet { if isShellReady { deliverHeldLink() } }
+        didSet {
+            if isShellReady {
+                deliverHeldLink()
+                ExternalStreamHandler.shared.deliverHeld()
+            }
+        }
     }
 
     // Seams for tests.
@@ -58,6 +63,8 @@ final class DeepLinkHandler: ObservableObject {
     // MARK: - Entry points
 
     func handle(url: URL) {
+        // infuse:// and rivulet://x-callback-url/play: a stream from another app (Stremio).
+        if ExternalStreamHandler.shared.handle(url: url) { return }
         guard let link = RivuletLink(url: url) else { return }
         handle(link)
     }

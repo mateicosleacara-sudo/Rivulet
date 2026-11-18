@@ -1620,6 +1620,7 @@ enum SettingsContent {
         let version = "\(short) (\(build))"
         return [
             SettingsRowItem(id: "about_version", title: "Version", kind: .info(value: { version })),
+        ] + externalStreamDebugRows + [
             SettingsRowItem(id: "changelog", title: "Changelog", kind: .action(destructive: false, handler: { vc in
                 presentChangelog(on: vc)
             })),
@@ -1703,6 +1704,18 @@ enum SettingsContent {
                 let i = all.firstIndex(of: MarkerSkipMode.current(for: marker)) ?? 0
                 MarkerSkipMode.set(all[(i + 1) % all.count], for: marker)
             }))
+    }
+
+    /// Hidden until another app has sent a stream link (Stremio's "Infuse" player): what
+    /// arrived, and a switch that shows each link before it plays.
+    private static var externalStreamDebugRows: [SettingsRowItem] {
+        guard ExternalStreamHandler.lastReceived != nil else { return [] }
+        return [
+            toggle("externalStreamDebug", "Show Received Links", key: ExternalStreamHandler.debugKey, default: false),
+            SettingsRowItem(id: "externalStreamLast", title: "Last Received Link", kind: .action(destructive: false, handler: { vc in
+                ExternalStreamHandler.presentLastReceived(from: vc)
+            })),
+        ]
     }
 
     private static func toggle(_ id: String, _ title: String.LocalizationValue, key: String, default def: Bool,
