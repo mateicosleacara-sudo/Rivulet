@@ -155,3 +155,88 @@ nonisolated struct StremioProgressReporter: ProgressReporter {
         StremioWatchStore.save(itemRef, position: position, item: await item())
     }
 }
+
+/// Plan to Watch: movies and shows saved on this device, newest first. It is what the app's
+/// favorites surfaces (the sidebar tab, the detail page's button, the tile menu) read for Stremio.
+nonisolated enum StremioPlanStore {
+    struct Entry: Codable, Sendable {
+        var item: MediaItem
+        var added: Date
+    }
+
+    static let defaultsKey = "stremioPlanToWatch"
+    nonisolated(unsafe) private static let lock = NSLock()
+
+    static func contains(_ ref: MediaItemRef) -> Bool {
+        lock.withLock { load()[ref.itemID] != nil }
+    }
+
+    static func items(providerID: String) -> [MediaItem] {
+        lock.withLock { load() }.values
+            .filter { $0.item.ref.providerID == providerID }
+            .sorted { $0.added > $1.added }
+            .map { entry in
+                var item = entry.item
+                let watched = StremioWatchStore.state(for: item.ref)
+                item.userState = MediaUserState(isPlayed: watched.isPlayed, viewOffset: watched.viewOffset,
+                                                isFavorite: true, lastViewedAt: watched.lastViewedAt)
+                return item
+            }
+    }
+
+    static func set(_ planned: Bool, item: MediaItem?, ref: MediaItemRef) {
+        lock.withLock {
+            var all = load()
+            if planned, let item {
+                all[ref.itemID] = Entry(item: item, added: all[ref.itemID]?.added ?? Date())
+            } else if !planned {
+                all[ref.itemID] = nil
+            }
+            UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: defaultsKey)
+        }
+    }
+
+    private static func load() -> [String: Entry] {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: Entry].self, from: data)) ?? [:]
+    }
+}
+
+/// The stream last played per title (a movie, or a whole show), kept on this device, so Play
+/// starts the same one again and the next episode starts the same release.
+nonisolated enum StremioStreamMemory {
+    struct Choice: Codable, Sendable {
+        var streamID: String
+        var fileName: String?
+        var bingeGroup: String?
+        var addon: String
+        var updated: Date
+    }
+
+    static let defaultsKey = "stremioStreamMemory"
+    nonisolated(unsafe) private static let lock = NSLock()
+    private static let maxEntries = 1000
+
+    static func choice(for metaID: String) -> Choice? {
+        lock.withLock { load()[metaID] }
+    }
+
+    static func record(_ option: StremioStreamOption, metaID: String) {
+        lock.withLock {
+            var all = load()
+            all[metaID] = Choice(streamID: option.id, fileName: option.source.fileName,
+                                 bingeGroup: option.stream.bingeGroup, addon: option.addonName, updated: Date())
+            if all.count > maxEntries {
+                for stale in all.sorted(by: { $0.value.updated < $1.value.updated }).prefix(all.count - maxEntries) {
+                    all[stale.key] = nil
+                }
+            }
+            UserDefaults.standard.set(try? JSONEncoder().encode(all), forKey: defaultsKey)
+        }
+    }
+
+    private static func load() -> [String: Choice] {
+        guard let data = UserDefaults.standard.data(forKey: defaultsKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: Choice].self, from: data)) ?? [:]
+    }
+}

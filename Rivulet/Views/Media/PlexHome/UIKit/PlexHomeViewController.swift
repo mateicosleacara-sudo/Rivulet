@@ -729,7 +729,7 @@ final class PlexHomeViewController: UIViewController {
         case .playlists:
             return String(localized: "No playlists yet.")
         case .favorites:
-            return String(localized: "No favorites yet. Hold Select on a movie or show to add one.")
+            return String(localized: "Nothing planned yet. Open a movie or show and press the bookmark, or hold Select on its poster.")
         case .playlist:
             return String(localized: "This playlist is empty.")
         case .library where providerLibrary != nil:
@@ -1646,6 +1646,7 @@ final class PlexHomeViewController: UIViewController {
                 if case .favorites = self.mode {
                     self.applySnapshot(animated: false)
                     self.reconfigureFavoriteTiles()
+                    self.reconfigureGridSlots(0..<self.gridItems.count)
                     self.updateHomeState()
                     return
                 }
@@ -4552,8 +4553,8 @@ final class PlexHomeViewController: UIViewController {
     /// Add to or remove from Favorites, from the item's own state. Every surface repaints after.
     private static func favoriteAction(for item: MediaItem) -> TileMenuAction {
         let isFavorite = item.userState.isFavorite
-        return TileMenuAction(title: isFavorite ? "Remove from Favorites" : "Add to Favorites",
-                              systemImage: isFavorite ? "heart.slash" : "heart") {
+        return TileMenuAction(title: isFavorite ? "Remove from Plan to Watch" : "Add to Plan to Watch",
+                              systemImage: isFavorite ? "bookmark.slash" : "bookmark") {
             Task { @MainActor in
                 try? await FavoritesFeed.set(!isFavorite, for: item)
                 NotificationCenter.default.post(name: .plexDataNeedsRefresh, object: nil)
@@ -4727,16 +4728,10 @@ final class PlexHomeViewController: UIViewController {
         if case .playlists = mode {
             return gridItems.isEmpty ? [] : [.grid(items: mapGridSlots(gridItems))]
         }
-        // Every server's favorites as Home's rows: Movies, then Shows, each by title.
-        // A Recently Added-kind row, so tap, tile menu and captions are Home's.
+        // Personal build: Plan to Watch is one titled poster grid that scrolls down, newest first.
         if case .favorites = mode {
             let items = gridItems.compactMap { $0 }
-            func row(_ id: HomeSectionID, _ title: String, _ items: [MediaItem]) -> [HomeSectionData] {
-                items.isEmpty ? [] : [.hub(id: id, title: title, items: items, isContinueWatching: false,
-                                           hubKey: nil, hubIdentifier: nil)]
-            }
-            return row(.favoriteMovies, String(localized: "Movies"), items.filter { $0.kind == .movie })
-                + row(.favoriteShows, String(localized: "Shows"), items.filter { $0.kind != .movie })
+            return items.isEmpty ? [] : [.grid(items: mapGridSlots(gridItems), title: String(localized: "Plan to Watch"))]
         }
         // Title, Play and Shuffle ride the header cell; `topSectionIndex` keeps Menu dismissing.
         if case .playlist(let playlist) = mode {

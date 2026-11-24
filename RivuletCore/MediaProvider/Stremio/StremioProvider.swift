@@ -58,6 +58,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     nonisolated let displayName = "Stremio"
     let connectionState: ConnectionState = .connected
     let supportsWatchlist = false
+    /// "Favorites" in the code, Plan to Watch on screen (`StremioPlanStore`).
+    let supportsFavorites = true
 
     let authKey: String
     private let addonStore: StremioAddonStore
@@ -348,7 +350,9 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
             title: preview.name, sortTitle: nil, overview: preview.description, year: preview.year,
             releaseDate: nil, contentRating: nil, runtime: preview.runtimeSeconds,
             parentRef: nil, grandparentRef: nil, episodeNumber: nil, seasonNumber: nil, childProgress: nil,
-            userState: state,
+            userState: MediaUserState(isPlayed: state.isPlayed, viewOffset: state.viewOffset,
+                                      isFavorite: StremioPlanStore.contains(MediaItemRef(providerID: id, itemID: ref.itemID)),
+                                      lastViewedAt: state.lastViewedAt),
             artwork: MediaArtwork(poster: StremioImages.poster(preview.poster), backdrop: StremioImages.backdrop(preview.background),
                                   thumbnail: nil, logo: StremioImages.logo(preview.logo)),
             parentArtwork: nil, grandparentArtwork: nil,
@@ -568,21 +572,13 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
         let runtime = await watchItem(for: itemRef)?.runtime
         let options = try await streamOptions(type: ref.type, id: ref.streamID, runtime: runtime)
         let explicit = sourceID.map(binge.takeExplicitPick) ?? false
-        var chosen = explicit ? sourceID.flatMap { id in options.first { $0.id == id } } : nil
-        // Up Next and Play without a pick: the release last played in this series (Stremio's
-        // bingeGroup), else the same addon's best, as Stremio's binge-watching does.
-        if chosen == nil, ref.kind == .episode, let last = binge.last(for: ref.metaID) {
-            let playable = StremioStreamParser.playable(options)
-            chosen = last.group.flatMap { group in playable.first { $0.stream.bingeGroup == group } }
-                ?? VersionRanking.choose(.best, from: playable.filter { $0.addonName == last.addon }.map(\.source))
-                    .flatMap { best in options.first { $0.id == best.id } }
-        }
-        chosen = chosen
+        // A pick made by hand, else the version the detail page asked for, else the recommended
+        // stream: the one last played for this title (the same release for the next episode).
+        let chosen = (explicit ? sourceID.flatMap { id in options.first { $0.id == id } } : nil)
             ?? sourceID.flatMap { id in options.first { $0.id == id } }
-            ?? VersionRanking.choose(.best, from: StremioStreamParser.playable(options).map(\.source))
-                .flatMap { best in options.first { $0.id == best.id } }
+            ?? StremioRecommendation.recommended(options, remembered: StremioStreamMemory.choice(for: ref.metaID))
         guard let option = chosen else { throw MediaProviderError.notPlayable }
-        binge.record(metaID: ref.metaID, group: option.stream.bingeGroup, addon: option.addonName)
+        StremioStreamMemory.record(option, metaID: ref.metaID)
 
         async let resolved = ExternalStreamResolver.resolve(option.url)
         async let subtitles = subtitleTracks(type: ref.type, id: ref.streamID, stream: option.stream)
@@ -685,6 +681,25 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
 
     func setSelectedAudioTrack(_ trackID: String, source sourceID: String, of itemRef: MediaItemRef) async throws {}
     func setSelectedSubtitleTrack(_ trackID: String?, source sourceID: String, of itemRef: MediaItemRef) async throws {}
+
+    /// Plan to Watch, once, under the lead library (the favorites feed asks every movie and show
+    /// library, and every Stremio title would otherwise come back once per catalog).
+    func favorites(in library: MediaLibrary, limit: Int) async throws -> [MediaItem] {
+        guard library.id == Self.leadCatalog((try? await catalogLibraries()) ?? [])?.id else { return [] }
+        return Array(StremioPlanStore.items(providerID: id).prefix(limit))
+    }
+
+    func setFavorite(_ favorite: Bool, for ref: MediaItemRef) async throws {
+        guard favorite else { return StremioPlanStore.set(false, item: nil, ref: ref) }
+        guard let parsed = StremioRef(ref.itemID), parsed.kind == .movie || parsed.kind == .series else {
+            throw MediaProviderError.notFound
+        }
+        let meta = try await self.meta(type: parsed.type, id: parsed.metaID)
+        var item = self.item(from: meta.preview, libraryID: nil)
+        item.userState = MediaUserState(isPlayed: item.userState.isPlayed, viewOffset: item.userState.viewOffset,
+                                        isFavorite: true, lastViewedAt: item.userState.lastViewedAt)
+        StremioPlanStore.set(true, item: item, ref: ref)
+    }
 
     func isOnWatchlist(_ ref: MediaItemRef) async -> Bool { false }
     func addToWatchlist(_ ref: MediaItemRef) async throws {}

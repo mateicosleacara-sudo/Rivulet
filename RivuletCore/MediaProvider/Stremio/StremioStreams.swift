@@ -183,3 +183,45 @@ nonisolated enum StremioStreamParser {
         return name.isEmpty ? "Stream" : name
     }
 }
+
+/// The stream Play starts without asking, and the one the picker marks Recommended:
+/// the stream last played for this title when it is still offered (for a show, the same
+/// release: Stremio's bingeGroup, else the same addon), else the best cached link by
+/// resolution, dynamic range and bitrate (`VersionRanking`), which puts remuxes first.
+nonisolated enum StremioRecommendation {
+    static func recommended(_ options: [StremioStreamOption], remembered: StremioStreamMemory.Choice?) -> StremioStreamOption? {
+        let playable = StremioStreamParser.playable(options)
+        if let remembered {
+            if let same = options.first(where: { $0.id == remembered.streamID }) { return same }
+            if let file = remembered.fileName, let same = playable.first(where: { $0.source.fileName == file }) { return same }
+            if let group = remembered.bingeGroup, let same = playable.first(where: { $0.stream.bingeGroup == group }) {
+                return same
+            }
+            let sameAddon = playable.filter { $0.addonName == remembered.addon }
+            if let best = best(sameAddon) { return best }
+        }
+        return best(playable)
+    }
+
+    private static func best(_ options: [StremioStreamOption]) -> StremioStreamOption? {
+        VersionRanking.choose(.best, from: options.map(\.source)).flatMap { best in options.first { $0.id == best.id } }
+    }
+
+    // The picker's filters.
+    static func isRemux(_ option: StremioStreamOption) -> Bool {
+        [option.stream.name, option.stream.description, option.stream.filename, option.source.fileName]
+            .compactMap { $0?.lowercased() }.contains { $0.contains("remux") }
+    }
+
+    static func is4K(_ option: StremioStreamOption) -> Bool { option.source.videoResolution == "4k" }
+
+    static func isDolbyVision(_ option: StremioStreamOption) -> Bool {
+        guard let range = option.source.videoTracks.first?.videoRange else { return false }
+        if case .dolbyVision = range { return true }
+        return false
+    }
+
+    static func isAtmos(_ option: StremioStreamOption) -> Bool {
+        option.source.audioTracks.contains { $0.profile?.contains("atmos") == true }
+    }
+}

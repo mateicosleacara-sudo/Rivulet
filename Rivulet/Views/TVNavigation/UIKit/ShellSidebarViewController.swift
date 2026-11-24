@@ -1119,7 +1119,7 @@ final class ShellSidebarViewController: UIViewController {
             combineLiveTV: flag("combineLiveTVSources", default: true),
             showDiscover: flag("showDiscoverTab", default: true) && PlexAuthManager.shared.hasCredentials,
             showWatchlist: flag("showWatchlistTab", default: true) && PlexAuthManager.shared.hasCredentials,
-            showFavorites: flag("showFavoritesTab", default: false) && PersonalHomeRows.offersFavorites,
+            showFavorites: flag("showFavoritesTab", default: true) && PersonalHomeRows.offersFavorites,
             order: LibrarySettingsManager.shared.libraryOrder,
             hiddenKeys: LibrarySettingsManager.shared.hiddenLibraryKeys,
             profileName: profileName)

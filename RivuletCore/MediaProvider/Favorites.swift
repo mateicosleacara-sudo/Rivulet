@@ -51,6 +51,8 @@ enum FavoritesFeed {
             }
             return await group.reduce(into: [MediaItem]()) { $0 += $1 }
         }
+        // Personal build: Stremio's Plan to Watch alone keeps the order it was added in (newest first).
+        if providers.filter({ $0.supportsFavorites }).allSatisfy({ $0.kind == .stremio }) { return found }
         return FavoritesOrder.byTitle(found)
     }
 

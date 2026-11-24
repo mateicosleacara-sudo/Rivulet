@@ -36,7 +36,7 @@ struct TVSidebarView: View {
     @AppStorage("combineLiveTVSources") private var combineLiveTVSources = true
     @AppStorage("showDiscoverTab") private var showDiscoverTab = true
     @AppStorage("showWatchlistTab") private var showWatchlistTab = true
-    @AppStorage("showFavoritesTab") private var showFavoritesTab = false
+    @AppStorage("showFavoritesTab") private var showFavoritesTab = true
     @State private var selectedTab: SidebarTab = .home
     @State private var showProfilePicker = false
     /// A profile was entered through the picker; any other close re-presents it.

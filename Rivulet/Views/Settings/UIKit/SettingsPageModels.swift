@@ -492,9 +492,7 @@ enum SettingsContent {
                             kind: .toggle(
                                 get: { PlexUserProfileManager.shared.showProfilePickerOnLaunch },
                                 set: { PlexUserProfileManager.shared.showProfilePickerOnLaunch = $0 })),
-            SettingsRowItem(id: "topShelfStyle", title: "Top Shelf",
-                            kind: .cycle(value: { TopShelfCache.shared.fullScreen ? String(localized: "Full Screen") : String(localized: "Posters") },
-                                         next: { TopShelfCache.shared.fullScreen.toggle() })),
+            // Personal build: no Top Shelf row. The extension can't be signed with a free Apple ID.
             toggle("skipPreview", "Skip Preview", key: "skipPreviewCarousel", default: false),
 
             // Titles drop whatever their caption already says ("Home Hero" under
@@ -1402,7 +1400,7 @@ enum SettingsContent {
                 kind = .toggle(get: { SettingsStore.bool("showWatchlistTab", default: true) },
                                set: { SettingsStore.setBool("showWatchlistTab", $0) })
             case SidebarArrangement.favorites:
-                kind = .toggle(get: { SettingsStore.bool("showFavoritesTab", default: false) },
+                kind = .toggle(get: { SettingsStore.bool("showFavoritesTab", default: true) },
                                set: { SettingsStore.setBool("showFavoritesTab", $0) })
             case _ where SidebarArrangement.isLiveTV(key):
                 // Live TV leaves the sidebar only with its sources: no toggle, nothing

@@ -27,6 +27,7 @@ final class SetupLandingViewController: UIViewController {
     private let embyCard = SetupLandingViewController.makeCard(title: "Emby", symbol: "play.square.stack.fill")
     private let liveTVCard = SetupLandingViewController.makeCard(title: String(localized: "Live TV"),
                                                                  symbol: "antenna.radiowaves.left.and.right")
+    private let stremioCard = SetupLandingViewController.makeCard(title: "Stremio", symbol: "play.circle.fill")
     private let doneButton = UIButton(configuration: .glass())
     private var sourcesObserver: AnyCancellable?
     private var cloudObserver: AnyCancellable?
@@ -42,11 +43,11 @@ final class SetupLandingViewController: UIViewController {
         view.addSubview(glow)
 
         let title = UILabel()
-        title.text = String(localized: "Welcome to Rivulet")
+        title.text = String(localized: "Welcome to Rivulet V2")
         title.font = .systemFont(ofSize: 57, weight: .bold)
         title.textColor = .white
         let subtitle = UILabel()
-        subtitle.text = String(localized: "Connect your media and Live TV to get started.")
+        subtitle.text = String(localized: "Sign in with your Stremio account to get started.")
         subtitle.font = .systemFont(ofSize: 29)
         subtitle.textColor = UIColor.white.withAlphaComponent(0.7)
 
@@ -54,8 +55,10 @@ final class SetupLandingViewController: UIViewController {
         jellyfinCard.addAction(UIAction { [weak self] _ in self?.connectJellyfin() }, for: .primaryActionTriggered)
         embyCard.addAction(UIAction { [weak self] _ in self?.connectEmby() }, for: .primaryActionTriggered)
         liveTVCard.addAction(UIAction { [weak self] _ in self?.addLiveTV() }, for: .primaryActionTriggered)
+        // Personal build: Stremio is the only way in.
+        stremioCard.addAction(UIAction { [weak self] _ in self?.connectStremio() }, for: .primaryActionTriggered)
         let cards = cardRow
-        [plexCard, jellyfinCard, embyCard, liveTVCard].forEach(cards.addArrangedSubview)
+        cards.addArrangedSubview(stremioCard)
         cards.spacing = Self.cardSpacing
 
         doneButton.configuration?.title = String(localized: "Start Watching")
@@ -133,7 +136,7 @@ final class SetupLandingViewController: UIViewController {
     private var focusesDone = false
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        focusesDone && doneButton.isEnabled ? [doneButton] : [plexCard]
+        focusesDone && doneButton.isEnabled ? [doneButton] : [stremioCard]
     }
 
     /// The guide sits between the cards and the button, so it points away from whichever side has focus:
@@ -141,7 +144,7 @@ final class SetupLandingViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
         if context.nextFocusedView === doneButton {
-            doneGuide.preferredFocusEnvironments = [(context.previouslyFocusedView as? UIButton) ?? jellyfinCard]
+            doneGuide.preferredFocusEnvironments = [(context.previouslyFocusedView as? UIButton) ?? stremioCard]
         } else if context.nextFocusedView is UIButton {
             doneGuide.preferredFocusEnvironments = [doneButton]
         }
@@ -159,6 +162,12 @@ final class SetupLandingViewController: UIViewController {
     private func connectJellyfin() {
         SettingsContent.addSourceDraft = AddSourceDraft()
         presentSettingsFlow(.jellyfin)
+    }
+
+    /// The Stremio page signs in (link code or email), or shows the account and Sign Out.
+    private func connectStremio() {
+        SettingsContent.addSourceDraft = AddSourceDraft()
+        presentSettingsFlow(.stremio)
     }
 
     private func connectEmby() {
@@ -213,8 +222,10 @@ final class SetupLandingViewController: UIViewController {
         Self.setDone(embyCard, prompt: String(localized: "Sign In"), detail: EmbySession.account?.serverName)
         Self.setDone(liveTVCard, prompt: String(localized: "Add a Source"), detail: liveTVDetail)
         // Held in place while hidden, so nothing moves when it appears.
-        // Personal build: always offered, since streams sent from Stremio need no server.
-        doneButton.isEnabled = true
+        Self.setDone(stremioCard, prompt: String(localized: "Sign In"), detail: StremioSession.account?.email
+                     ?? (StremioSession.account != nil ? String(localized: "Connected") : nil))
+        // Personal build: Start Watching once Stremio is signed in.
+        doneButton.isEnabled = StremioSession.account != nil
         doneButton.alpha = doneButton.isEnabled ? 1 : 0
         doneGuide.isEnabled = doneButton.isEnabled
     }

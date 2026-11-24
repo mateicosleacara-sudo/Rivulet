@@ -665,6 +665,13 @@ final class MediaDetailChromeView: UIView {
 
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
+        if MediaProviderRegistry.shared.provider(for: item.ref.providerID)?.kind == .stremio {
+            // Hold Play to choose the stream; a click starts the recommended one.
+            play.onLongPress = { [weak self] in
+                StremioPlayFlow.choosePickerOnce = true
+                self?.onPlay?()
+            }
+        }
         // Movie/episode: the item's own state. Show/season: reads "Play" until
         // the Play target resolves async in `resolvePlayTarget`.
         setPlayTarget(item)
@@ -688,7 +695,7 @@ final class MediaDetailChromeView: UIView {
         watchlist.onPrimaryAction = { [weak self] in self?.toggleWatchlist(item) }
 
         // Movies and shows on a server that keeps favorites.
-        let favorite: FocusableActionButton? = FavoritesFeed.canFavorite(item) ? makeCircleButton(systemImage: "heart") : nil
+        let favorite: FocusableActionButton? = FavoritesFeed.canFavorite(item) ? makeCircleButton(systemImage: "bookmark") : nil
         favoriteButton = favorite
         heroFavorite = item.userState.isFavorite
         updateFavoriteIcon()
@@ -908,9 +915,9 @@ final class MediaDetailChromeView: UIView {
     }
 
     private func updateFavoriteIcon() {
-        Self.setCircleIcon(favoriteButton, heroFavorite ? "heart.fill" : "heart")
+        Self.setCircleIcon(favoriteButton, heroFavorite ? "bookmark.fill" : "bookmark")
         favoriteButton?.accessibilityLabel = heroFavorite
-            ? String(localized: "Remove from Favorites") : String(localized: "Add to Favorites")
+            ? String(localized: "Remove from Plan to Watch") : String(localized: "Add to Plan to Watch")
     }
 
     // Distinct active glyphs so watched ≠ watchlist when both are on.

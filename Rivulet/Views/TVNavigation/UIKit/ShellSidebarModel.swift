@@ -253,7 +253,7 @@ enum ShellSidebarModel {
         // Favorites gather every server's, so no server either.
         if showFavorites {
             rows.append(Row(key: SidebarArrangement.favorites,
-                            item: ShellSidebarItem(tab: .favorites, title: String(localized: "Favorites"), icon: "heart.fill"), serverName: nil))
+                            item: ShellSidebarItem(tab: .favorites, title: String(localized: "Plan to Watch"), icon: "bookmark.fill"), serverName: nil))
         }
         rows += libraries.map { Row(key: $0.key, item: $0.item, serverName: $0.serverName) }
         for server in playlistServers {

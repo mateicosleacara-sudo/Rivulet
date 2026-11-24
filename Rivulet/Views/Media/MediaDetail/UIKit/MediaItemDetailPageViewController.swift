@@ -436,6 +436,14 @@ final class MediaItemDetailPageViewController: UIViewController {
         if item.isMetadataOnly { return makeMetadataOnlyActionRow() }
         let (pill, title, _) = FocusableActionButton.pill(title: playPillTitle, systemImage: "play.fill")
         pill.onPrimaryAction = { [weak self] in guard let self else { return }; self.onPlay(self.item, nil) }
+        if MediaProviderRegistry.shared.provider(for: item.ref.providerID)?.kind == .stremio {
+            // Hold Play to choose the stream; a click starts the recommended one.
+            pill.onLongPress = { [weak self] in
+                guard let self else { return }
+                StremioPlayFlow.choosePickerOnce = true
+                self.onPlay(self.item, nil)
+            }
+        }
         playButton = pill
         playTitleLabel = title
 
