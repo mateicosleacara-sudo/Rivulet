@@ -21,6 +21,11 @@ final class StremioStreamPickerViewController: UIViewController {
     /// The stream last played for this title, shown again first as "Last Watched" (it stays in the list too).
     var lastWatched: (([StremioStreamOption]) -> StremioStreamOption?)?
     private var lastWatchedOption: StremioStreamOption?
+    /// Quick start: "Starting your last stream…" with Choose Stream and Cancel instead of the list,
+    /// until the flow starts the last-watched stream or the user asks for the list.
+    private(set) var isQuickStart = false
+    var lastWatchedStream: StremioStreamOption? { lastWatchedOption }
+    private let chooseButton = UIButton(configuration: .glass())
 
     private var options: [StremioStreamOption] = []
     /// The left list: addons in `addonPriority` order, then All.
@@ -120,7 +125,12 @@ final class StremioStreamPickerViewController: UIViewController {
             self.onCancel?()
         }, for: .primaryActionTriggered)
         statusStack.setCustomSpacing(40, after: statusLabel)
-        statusStack.addArrangedSubview(cancelButton)
+        chooseButton.configuration?.title = String(localized: "Choose Stream")
+        chooseButton.isHidden = true
+        chooseButton.addAction(UIAction { [weak self] _ in self?.showList() }, for: .primaryActionTriggered)
+        let buttons = UIStackView(arrangedSubviews: [chooseButton, cancelButton])
+        buttons.spacing = 30
+        statusStack.addArrangedSubview(buttons)
         statusStack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusStack)
 
@@ -170,6 +180,7 @@ final class StremioStreamPickerViewController: UIViewController {
     func setOptions(_ options: [StremioStreamOption], preselect: String?, isLoading: Bool = false) {
         loadViewIfNeeded()
         let wasEmpty = self.options.isEmpty
+        isFetching = isLoading
         // Priority order, each addon's own stream order kept within it.
         self.options = options.enumerated()
             .sorted { (Self.addonPriority($0.element.addonName), $0.offset) < (Self.addonPriority($1.element.addonName), $1.offset) }
@@ -199,7 +210,9 @@ final class StremioStreamPickerViewController: UIViewController {
             streamTable.reloadData()
         }
         moreLabel.isHidden = !isLoading || self.options.isEmpty
-        if self.options.isEmpty {
+        if isQuickStart {
+            // The list stays behind the status until the flow starts the stream or the user asks for it.
+        } else if self.options.isEmpty {
             if isLoading {
                 showStatus(String(localized: "Finding streams…"), spinning: true)
             } else {
@@ -214,8 +227,40 @@ final class StremioStreamPickerViewController: UIViewController {
         }
     }
 
+    /// Play with a last-watched stream: a status screen while the flow waits for it to be offered.
+    func beginQuickStart() {
+        loadViewIfNeeded()
+        isQuickStart = true
+        showStatus(String(localized: "Starting your last stream…"), spinning: true)
+        chooseButton.isHidden = false
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    /// Leaves quick start for the list (or its empty or loading message).
+    func showList() {
+        guard isQuickStart, !isStarting else { return }
+        isQuickStart = false
+        chooseButton.isHidden = true
+        if options.isEmpty {
+            let loading = isFetching
+            showStatus(loading ? String(localized: "Finding streams…")
+                       : String(localized: "No streams found. Your addons have nothing playable for this title yet."),
+                       spinning: loading)
+        } else {
+            hideStatus()
+        }
+        setNeedsFocusUpdate()
+        updateFocusIfNeeded()
+    }
+
+    /// True until the last addon has answered (set by `setOptions`).
+    private var isFetching = true
+
     /// The picked stream is starting: hold every press until the player is up.
     func showStarting() {
+        isQuickStart = false
+        chooseButton.isHidden = true
         isStarting = true
         showStatus(String(localized: "Starting…"), spinning: true)
         setNeedsFocusUpdate()
@@ -244,8 +289,8 @@ final class StremioStreamPickerViewController: UIViewController {
         // Something to focus while loading, so Menu and Select reach this screen.
         cancelButton.isHidden = isStarting
         // A list under the status would still take focus (and the geometric focus test needs it hidden).
-        addonTable.isHidden = spinning || options.isEmpty
-        streamTable.isHidden = spinning || options.isEmpty
+        addonTable.isHidden = spinning || options.isEmpty || isQuickStart
+        streamTable.isHidden = spinning || options.isEmpty || isQuickStart
     }
 
     private func hideStatus() {
@@ -267,7 +312,8 @@ final class StremioStreamPickerViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        streamTable.isHidden ? [cancelButton] : [streamTable]
+        if streamTable.isHidden { return isQuickStart ? [chooseButton] : [cancelButton] }
+        return [streamTable]
     }
 
     private var laidOutWidth: CGFloat = 0

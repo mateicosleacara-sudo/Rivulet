@@ -22,6 +22,20 @@ final class FocusableActionButton: UIControl {
     /// Invoked on Select (`.primaryActionTriggered`).
     var onPrimaryAction: (() -> Void)?
 
+    /// Invoked when Select is held instead of clicked; the release then fires nothing. A gesture
+    /// recognizer, as the tile menus use: a held press reaching `pressesBegan` is cancelled by tvOS.
+    var onLongPress: (() -> Void)? {
+        didSet {
+            guard onLongPress != nil, longPress == nil else { return }
+            let recognizer = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
+            recognizer.allowedPressTypes = [NSNumber(value: UIPress.PressType.select.rawValue)]
+            recognizer.minimumPressDuration = 0.6
+            addGestureRecognizer(recognizer)
+            longPress = recognizer
+        }
+    }
+    private var longPress: UILongPressGestureRecognizer?
+
     /// `.pill` inverts to white with black content; `.glass` keeps content white, for large targets like the bio panel.
     enum FocusStyle { case pill, glass }
     var focusStyle: FocusStyle = .pill
@@ -62,6 +76,13 @@ final class FocusableActionButton: UIControl {
     }
 
     @objc private func primary() { fireOnce() }
+
+    @objc private func held(_ recognizer: UILongPressGestureRecognizer) {
+        // Every state after it began, the release included, counts as "just fired".
+        lastFireTime = CACurrentMediaTime()
+        guard recognizer.state == .began else { return }
+        onLongPress?()
+    }
 
     // A bare UIControl's primaryActionTriggered misses Select on tvOS, so presses fire
     // too, debounced against double-firing.
