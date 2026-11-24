@@ -60,6 +60,7 @@ enum ProviderPlayer {
                                  from: presenter, onDismiss: onDismiss, onFailedToStart: onFailedToStart)
             return
         }
+        StremioPlayFlow.choosePickerOnce = false  // a hold on another server's title means nothing
         guard claimStart() else { onFailedToStart?(); return }
         Task { @MainActor in
             defer { finishStart() }

@@ -578,7 +578,8 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
             ?? sourceID.flatMap { id in options.first { $0.id == id } }
             ?? StremioRecommendation.recommended(options, remembered: StremioStreamMemory.choice(for: ref.metaID))
         guard let option = chosen else { throw MediaProviderError.notPlayable }
-        StremioStreamMemory.record(option, metaID: ref.metaID)
+        // Remembered as Last Watched only after 3 minutes of it (`StremioProgressReporter`).
+        binge.setPlaying(option, metaID: ref.metaID, itemID: itemRef.itemID)
 
         async let resolved = ExternalStreamResolver.resolve(option.url)
         async let subtitles = subtitleTracks(type: ref.type, id: ref.streamID, stream: option.stream)
@@ -654,8 +655,12 @@ final class StremioProvider: MediaProvider, @unchecked Sendable {
     }
 
     func progressReporter(for itemRef: MediaItemRef, sourceID: String?, playSessionID: String?) -> any ProgressReporter {
-        StremioProgressReporter(providerID: id, itemRef: itemRef, item: { [weak self] in
+        let binge = binge
+        return StremioProgressReporter(providerID: id, itemRef: itemRef, item: { [weak self] in
             await self?.watchItem(for: itemRef)
+        }, rememberStream: {
+            guard let (option, metaID) = binge.playing(itemID: itemRef.itemID) else { return }
+            StremioStreamMemory.record(option, metaID: metaID)
         })
     }
 
@@ -787,6 +792,15 @@ nonisolated final class StremioBinge: @unchecked Sendable {
     }
 
     func last(for metaID: String) -> Last? { lock.withLock { lastBySeries[metaID] } }
+
+    /// The stream each title is playing, until 3 minutes of it make it Last Watched.
+    private var playingByItem: [String: (StremioStreamOption, String)] = [:]
+
+    func setPlaying(_ option: StremioStreamOption, metaID: String, itemID: String) {
+        lock.withLock { playingByItem[itemID] = (option, metaID) }
+    }
+
+    func playing(itemID: String) -> (StremioStreamOption, String)? { lock.withLock { playingByItem[itemID] } }
 
     func record(metaID: String, group: String?, addon: String) {
         lock.withLock { lastBySeries[metaID] = Last(group: group, addon: addon) }

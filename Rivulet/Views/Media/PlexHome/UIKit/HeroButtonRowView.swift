@@ -101,6 +101,11 @@ final class HeroButtonRowView: UIView {
         nextButton.accessibilityLabel = String(localized: "Next featured item")
 
         playButton.addTarget(self, action: #selector(playTapped), for: .primaryActionTriggered)
+        // Holding Play opens a Stremio title's stream list instead of restarting its last stream.
+        let hold = UILongPressGestureRecognizer(target: self, action: #selector(playHeld(_:)))
+        hold.allowedPressTypes = [NSNumber(value: UIPress.PressType.select.rawValue)]
+        hold.minimumPressDuration = 0.6
+        playButton.addGestureRecognizer(hold)
         watchlistButton.addTarget(self, action: #selector(watchlistTapped), for: .primaryActionTriggered)
         infoButton.addTarget(self, action: #selector(infoTapped), for: .primaryActionTriggered)
         nextButton.addTarget(self, action: #selector(nextTapped), for: .primaryActionTriggered)
@@ -233,7 +238,18 @@ final class HeroButtonRowView: UIView {
 
     // MARK: - Targets
 
+    private var lastHold: CFTimeInterval = 0
+
+    @objc private func playHeld(_ recognizer: UILongPressGestureRecognizer) {
+        lastHold = CACurrentMediaTime()
+        guard recognizer.state == .began, case .play = primaryAction else { return }
+        StremioPlayFlow.choosePickerOnce = true
+        onPlay?()
+    }
+
     @objc private func playTapped() {
+        // The release of a hold that already played.
+        guard CACurrentMediaTime() - lastHold > 0.5 else { return }
         switch primaryAction {
         case .play: onPlay?()
         case .watchlist: onWatchlist?()

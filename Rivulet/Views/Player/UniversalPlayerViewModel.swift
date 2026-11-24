@@ -176,6 +176,9 @@ final class UniversalPlayerViewModel: ObservableObject, WatchTogetherPlayer {
     private var titleLogoResolveTask: Task<Void, Never>?
 
     @Published var shouldDismiss = false  // Used to request player dismissal on tvOS
+    /// Stremio: the next episode goes to the stream list instead of playing a stream picked here.
+    /// Set by `StremioPlayFlow`; the player closes and the list for the episode opens.
+    var chooseNextStream: ((MediaItem) -> Void)?
     @Published var compatibilityNotice: String?
 
     // MARK: - Seek Indicator State
@@ -5935,6 +5938,8 @@ final class UniversalPlayerViewModel: ObservableObject, WatchTogetherPlayer {
         // episode is prepared now, so a failure shows before the countdown fires.
         Task {
             if case .provider = source, let next = nextEpisode {
+                // Stremio picks the next stream in its list: nothing to prepare here.
+                guard chooseNextStream == nil else { return }
                 await preparedNextProviderPlayback(for: next)
             } else {
                 await preloadNextEpisode()
@@ -6642,6 +6647,22 @@ final class UniversalPlayerViewModel: ObservableObject, WatchTogetherPlayer {
         // countdown and a Play Now press) must not start another one.
         guard !isSwappingItem else { return }
         let stops = stopCount
+
+        // Stremio: stop here, count the episode, and let the stream list choose the next one.
+        if let chooseNextStream, case .provider = source, let key = next.ratingKey,
+           let nextItem = providerEpisodeItems[key] {
+            isSwappingItem = true
+            defer { isSwappingItem = false }
+            let reachedEnd = queueIndex == nil || hasTriggeredPostVideo || postVideoState != .hidden
+            cancelCountdown()
+            await stopProviderReporter(at: currentTime)
+            guard stops == stopCount else { return }
+            if reachedEnd { await markCurrentAsWatched() }
+            guard stops == stopCount else { return }
+            chooseNextStream(nextItem)
+            shouldDismiss = true
+            return
+        }
 
         // Everything below runs while the OUTGOING episode is still playing.
         // See `isSwappingItem`.

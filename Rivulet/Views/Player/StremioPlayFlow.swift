@@ -9,7 +9,8 @@
 //  with no last-watched stream, opens the list instead. The stream picker goes up at once (so there is no dead
 //  time to press other things in), the streams fill it as the addons answer, and
 //  the pick starts the player on top of it. Closing the player closes the picker
-//  too; a stream that fails to start leaves the list up to pick another.
+//  too; a stream that fails to start leaves the list up to pick another. Up Next closes the
+//  player and opens the next episode's list (Last Watched on top) instead of picking for you.
 //
 
 import UIKit
@@ -76,8 +77,25 @@ enum StremioPlayFlow {
                                 detailOffset: playback.detail.item.userState.viewOffset, fromBeginning: fromBeginning),
                             loadingArtImage: art, loadingThumbImage: thumb, preferredMediaID: option.id)
                         configure?(viewModel)
+                        // Up Next: the player closes and the next episode's stream list opens.
+                        let handoff = NextEpisodeHandoff()
+                        viewModel.chooseNextStream = { handoff.item = $0 }
                         PlayerPresenter.present(viewModel: viewModel, from: picker) { [weak picker] in
-                            if let picker { close(picker) }
+                            guard !handoff.closed else { return }
+                            handoff.closed = true
+                            let upcoming = handoff.item
+                            let next: () -> Void = {
+                                guard let upcoming else { return }
+                                choosePickerOnce = true
+                                play(upcoming, provider: provider, fromBeginning: false, sourceID: nil,
+                                     explicitStartOffset: nil, configure: configure, from: presenter,
+                                     onDismiss: onDismiss, onFailedToStart: onFailedToStart)
+                            }
+                            if let picker, let presenting = picker.presentingViewController {
+                                presenting.dismiss(animated: upcoming == nil, completion: next)
+                            } else {
+                                next()
+                            }
                             onDismiss?()
                         }
                     } catch {
@@ -108,4 +126,12 @@ enum StremioPlayFlow {
         let numbers = String(localized: "S\(season), E\(episode)")
         return item.title.isEmpty ? numbers : "\(numbers) · \(item.title)"
     }
+}
+
+/// The player's dismissal can be reported twice; the first one acts. `item` is the next
+/// episode when Up Next asked for its stream list.
+@MainActor
+private final class NextEpisodeHandoff {
+    var item: MediaItem?
+    var closed = false
 }

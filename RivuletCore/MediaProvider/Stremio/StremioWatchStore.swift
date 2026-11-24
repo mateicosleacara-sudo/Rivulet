@@ -140,16 +140,48 @@ nonisolated enum StremioWatchStore {
     }
 }
 
-/// Saves the position the player reports (`PlaybackTimeline`: start, every 10 s, pause, stop).
-nonisolated struct StremioProgressReporter: ProgressReporter {
+/// Saves the position the player reports (`PlaybackTimeline`: start, every 10 s, pause, stop),
+/// and once 3 minutes of the stream have played, remembers it as the title's Last Watched, so a
+/// stream stopped early because it played badly is not offered or restarted again.
+nonisolated final class StremioProgressReporter: ProgressReporter, @unchecked Sendable {
+    static let rememberAfter: TimeInterval = 180
+
     let providerID: String
     let itemRef: MediaItemRef
     let item: @Sendable () async -> MediaItem?
+    private let rememberStream: @Sendable () -> Void
+    private let lock = NSLock()
+    private var lastPosition: TimeInterval?
+    private var watched: TimeInterval = 0
+    private var remembered = false
 
-    func start(position: TimeInterval) async throws { await save(position) }
-    func progress(position: TimeInterval) async { await save(position) }
-    func paused(at position: TimeInterval) async { await save(position) }
-    func stopped(at position: TimeInterval) async { await save(position) }
+    init(providerID: String, itemRef: MediaItemRef, item: @escaping @Sendable () async -> MediaItem?,
+         rememberStream: @escaping @Sendable () -> Void) {
+        self.providerID = providerID
+        self.itemRef = itemRef
+        self.item = item
+        self.rememberStream = rememberStream
+    }
+
+    func start(position: TimeInterval) async throws {
+        lock.withLock { lastPosition = position }
+        await save(position)
+    }
+    func progress(position: TimeInterval) async { count(position); await save(position) }
+    func paused(at position: TimeInterval) async { count(position); await save(position) }
+    func stopped(at position: TimeInterval) async { count(position); await save(position) }
+
+    /// Playing time only: a seek (a jump of more than 30 s between reports) adds nothing.
+    private func count(_ position: TimeInterval) {
+        let remember: Bool = lock.withLock {
+            if let last = lastPosition, position > last, position - last <= 30 { watched += position - last }
+            lastPosition = position
+            guard !remembered, watched >= Self.rememberAfter else { return false }
+            remembered = true
+            return true
+        }
+        if remember { rememberStream() }
+    }
 
     private func save(_ position: TimeInterval) async {
         StremioWatchStore.save(itemRef, position: position, item: await item())
