@@ -665,13 +665,6 @@ final class MediaDetailChromeView: UIView {
 
         let play = makePlayPill(item: item)
         play.onPrimaryAction = { [weak self] in self?.onPlay?() }
-        if MediaProviderRegistry.shared.provider(for: item.ref.providerID)?.kind == .stremio {
-            // Hold Play to choose the stream; a click starts the recommended one.
-            play.onLongPress = { [weak self] in
-                StremioPlayFlow.choosePickerOnce = true
-                self?.onPlay?()
-            }
-        }
         // Movie/episode: the item's own state. Show/season: reads "Play" until
         // the Play target resolves async in `resolvePlayTarget`.
         setPlayTarget(item)

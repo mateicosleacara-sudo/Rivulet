@@ -2155,6 +2155,7 @@ final class PlexHomeViewController: UIViewController {
     override func didUpdateFocus(in context: UIFocusUpdateContext,
                                  with coordinator: UIFocusAnimationCoordinator) {
         super.didUpdateFocus(in: context, with: coordinator)
+        followFocusWithAmbient(context.nextFocusedView)
         let prevInside = context.previouslyFocusedView?.isDescendant(of: collectionView) == true
         let nextInside = context.nextFocusedView?.isDescendant(of: collectionView) == true
         guard !prevInside, nextInside else { return }
@@ -2164,6 +2165,29 @@ final class PlexHomeViewController: UIViewController {
                 landed === $0 || landed?.isDescendant(of: $0) == true
             }.flatMap { row.rowCollectionView.indexPath(for: $0)?.item }
             row.resetVisibleFocusAppearance(except: landedIndex)
+        }
+    }
+
+    /// Plan to Watch: the background crossfades to the focused title's art, after a short pause so
+    /// sweeping across the grid doesn't flicker through every poster.
+    private var ambientFollowTask: Task<Void, Never>?
+
+    private func followFocusWithAmbient(_ focused: UIView?) {
+        guard case .favorites = mode else { return }
+        var view = focused
+        while let current = view, !(current is UICollectionViewCell && current.superview === collectionView) {
+            view = current.superview
+        }
+        guard let cell = view as? UICollectionViewCell, let indexPath = collectionView.indexPath(for: cell),
+              sectionsSnapshot.indices.contains(indexPath.section),
+              sectionsSnapshot[indexPath.section].items.indices.contains(indexPath.item) else { return }
+        let request = sectionsSnapshot[indexPath.section].items[indexPath.item].heroBackdropRequest()
+        guard let url = request.backdropURL ?? request.thumbnailURL else { return }
+        ambientFollowTask?.cancel()
+        ambientFollowTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.ambientView.setAmbient(url: url)
         }
     }
 

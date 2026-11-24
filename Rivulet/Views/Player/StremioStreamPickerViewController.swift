@@ -18,42 +18,9 @@ final class StremioStreamPickerViewController: UIViewController {
 
     var onSelect: ((StremioStreamOption) -> Void)?
     var onCancel: (() -> Void)?
-    /// The stream Play would start (`StremioRecommendation`), shown first as Recommended.
-    var recommend: (([StremioStreamOption]) -> StremioStreamOption?)?
-    /// Quick start: the screen reads "Finding the best stream…" instead of showing the list,
-    /// until the flow starts the recommended stream or the user asks for the list.
-    private(set) var isQuickStart = false
-    private var recommendedOption: StremioStreamOption?
-
-    /// The filter row above the streams, remembered across titles.
-    enum Filter: String, CaseIterable {
-        case cached, uhd, dolbyVision, remux, atmos
-        var title: String {
-            switch self {
-            case .cached: String(localized: "Cached")
-            case .uhd: String(localized: "4K")
-            case .dolbyVision: String(localized: "Dolby Vision")
-            case .remux: String(localized: "Remux")
-            case .atmos: String(localized: "Atmos")
-            }
-        }
-        func matches(_ option: StremioStreamOption) -> Bool {
-            switch self {
-            case .cached: !option.isUncached
-            case .uhd: StremioRecommendation.is4K(option)
-            case .dolbyVision: StremioRecommendation.isDolbyVision(option)
-            case .remux: StremioRecommendation.isRemux(option)
-            case .atmos: StremioRecommendation.isAtmos(option)
-            }
-        }
-    }
-    private static let filtersKey = "stremioPickerFilters"
-    private var activeFilters: Set<Filter> = Set(
-        (UserDefaults.standard.stringArray(forKey: StremioStreamPickerViewController.filtersKey) ?? []).compactMap { Filter(rawValue: $0) })
-    private let filterStack = UIStackView()
-    private var filterButtons: [Filter: UIButton] = [:]
-    private let emptyFilterLabel = UILabel()
-    private let chooseButton = UIButton(configuration: .glass())
+    /// The stream last played for this title, shown again first as "Last Watched" (it stays in the list too).
+    var lastWatched: (([StremioStreamOption]) -> StremioStreamOption?)?
+    private var lastWatchedOption: StremioStreamOption?
 
     private var options: [StremioStreamOption] = []
     /// The left list: addons in `addonPriority` order, then All.
@@ -153,12 +120,7 @@ final class StremioStreamPickerViewController: UIViewController {
             self.onCancel?()
         }, for: .primaryActionTriggered)
         statusStack.setCustomSpacing(40, after: statusLabel)
-        chooseButton.configuration?.title = String(localized: "Choose Stream")
-        chooseButton.isHidden = true
-        chooseButton.addAction(UIAction { [weak self] _ in self?.showList() }, for: .primaryActionTriggered)
-        let buttons = UIStackView(arrangedSubviews: [chooseButton, cancelButton])
-        buttons.spacing = 30
-        statusStack.addArrangedSubview(buttons)
+        statusStack.addArrangedSubview(cancelButton)
         statusStack.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(statusStack)
 
@@ -166,24 +128,6 @@ final class StremioStreamPickerViewController: UIViewController {
         moreLabel.font = .systemFont(ofSize: 22, weight: .medium)
         moreLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         moreLabel.isHidden = true
-        filterStack.axis = .horizontal
-        filterStack.spacing = 20
-        filterStack.translatesAutoresizingMaskIntoConstraints = false
-        for filter in Filter.allCases {
-            let button = UIButton(configuration: .glass())
-            button.addAction(UIAction { [weak self] _ in self?.toggle(filter) }, for: .primaryActionTriggered)
-            filterButtons[filter] = button
-            filterStack.addArrangedSubview(button)
-        }
-        renderFilters()
-        view.addSubview(filterStack)
-        emptyFilterLabel.text = String(localized: "No streams match these filters.")
-        emptyFilterLabel.font = .systemFont(ofSize: 28, weight: .medium)
-        emptyFilterLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        emptyFilterLabel.isHidden = true
-        emptyFilterLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(emptyFilterLabel)
-
         let header = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel, moreLabel])
         header.axis = .vertical
         header.spacing = 6
@@ -200,11 +144,7 @@ final class StremioStreamPickerViewController: UIViewController {
             addonTable.widthAnchor.constraint(equalToConstant: 430),
             addonTable.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            filterStack.topAnchor.constraint(equalTo: addonTable.topAnchor, constant: 6),
-            filterStack.leadingAnchor.constraint(equalTo: streamTable.leadingAnchor, constant: 8),
-            streamTable.topAnchor.constraint(equalTo: filterStack.bottomAnchor, constant: 14),
-            emptyFilterLabel.topAnchor.constraint(equalTo: streamTable.topAnchor, constant: 30),
-            emptyFilterLabel.leadingAnchor.constraint(equalTo: streamTable.leadingAnchor, constant: 16),
+            streamTable.topAnchor.constraint(equalTo: addonTable.topAnchor),
             streamTable.leadingAnchor.constraint(equalTo: addonTable.trailingAnchor, constant: 40),
             streamTable.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -70),
             streamTable.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -251,18 +191,15 @@ final class StremioStreamPickerViewController: UIViewController {
             addons = rows
             addonTable.reloadData()
         }
-        recommendedOption = recommend?(self.options)
+        lastWatchedOption = lastWatched?(self.options)
         // Only when what is shown changed, so focus in the list doesn't jump as other addons answer.
-        let ids = (shownRecommended.map { ["r" + $0.id] } ?? []) + visibleOptions.map(\.id)
+        let ids = shownIDs
         if ids != shownStreamIDs {
             shownStreamIDs = ids
             streamTable.reloadData()
         }
         moreLabel.isHidden = !isLoading || self.options.isEmpty
-        updateEmptyFilterLabel()
-        if isQuickStart {
-            // The flow starts the recommended stream; the list stays behind the status until asked for.
-        } else if self.options.isEmpty {
+        if self.options.isEmpty {
             if isLoading {
                 showStatus(String(localized: "Finding streams…"), spinning: true)
             } else {
@@ -277,39 +214,8 @@ final class StremioStreamPickerViewController: UIViewController {
         }
     }
 
-    /// Play without choosing: a status screen with Choose Stream and Cancel while the flow
-    /// waits for the recommended stream.
-    func beginQuickStart() {
-        loadViewIfNeeded()
-        isQuickStart = true
-        showStatus(String(localized: "Finding the best stream…"), spinning: true)
-        chooseButton.isHidden = false
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
-    }
-
-    /// The recommended stream, once the addons have answered (nil while there is none).
-    var recommendation: StremioStreamOption? { recommendedOption }
-
-    /// Quick start found nothing it could start: the list (or its empty message) comes up.
-    func showList() {
-        guard isQuickStart, !isStarting else { return }
-        isQuickStart = false
-        chooseButton.isHidden = true
-        if options.isEmpty {
-            showStatus(moreLabel.isHidden ? String(localized: "No streams found. Your addons have nothing playable for this title yet.")
-                       : String(localized: "Finding streams…"), spinning: !moreLabel.isHidden)
-        } else {
-            hideStatus()
-        }
-        setNeedsFocusUpdate()
-        updateFocusIfNeeded()
-    }
-
     /// The picked stream is starting: hold every press until the player is up.
     func showStarting() {
-        isQuickStart = false
-        chooseButton.isHidden = true
         isStarting = true
         showStatus(String(localized: "Starting…"), spinning: true)
         setNeedsFocusUpdate()
@@ -324,38 +230,11 @@ final class StremioStreamPickerViewController: UIViewController {
         present(popup, animated: true)
     }
 
+    private var shownIDs: [String] { (lastWatchedOption.map { ["last-" + $0.id] } ?? []) + visibleOptions.map(\.id) }
+
     private var visibleOptions: [StremioStreamOption] {
-        let inAddon = selectedAddon.map { addon in options.filter { $0.addonName == addon } } ?? options
-        return inAddon.filter { option in activeFilters.allSatisfy { $0.matches(option) } }
-    }
-
-    /// The Recommended card, shown above the list while it passes the filters.
-    private var shownRecommended: StremioStreamOption? {
-        guard let recommendedOption, activeFilters.allSatisfy({ $0.matches(recommendedOption) }) else { return nil }
-        return recommendedOption
-    }
-
-    private func toggle(_ filter: Filter) {
-        if activeFilters.contains(filter) { activeFilters.remove(filter) } else { activeFilters.insert(filter) }
-        UserDefaults.standard.set(activeFilters.map(\.rawValue), forKey: Self.filtersKey)
-        renderFilters()
-        shownStreamIDs = (shownRecommended.map { ["r" + $0.id] } ?? []) + visibleOptions.map(\.id)
-        streamTable.reloadData()
-        updateEmptyFilterLabel()
-    }
-
-    private func renderFilters() {
-        for (filter, button) in filterButtons {
-            let on = activeFilters.contains(filter)
-            button.configuration?.title = filter.title
-            button.configuration?.image = UIImage(systemName: on ? "checkmark.circle.fill" : "circle")
-            button.configuration?.imagePadding = 10
-        }
-    }
-
-    private func updateEmptyFilterLabel() {
-        emptyFilterLabel.isHidden = streamTable.isHidden || options.isEmpty
-            || !(visibleOptions.isEmpty && shownRecommended == nil)
+        guard let selectedAddon else { return options }
+        return options.filter { $0.addonName == selectedAddon }
     }
 
     private func showStatus(_ text: String, spinning: Bool) {
@@ -365,11 +244,8 @@ final class StremioStreamPickerViewController: UIViewController {
         // Something to focus while loading, so Menu and Select reach this screen.
         cancelButton.isHidden = isStarting
         // A list under the status would still take focus (and the geometric focus test needs it hidden).
-        let listHidden = spinning || options.isEmpty || isQuickStart
-        addonTable.isHidden = listHidden
-        streamTable.isHidden = listHidden
-        filterStack.isHidden = listHidden
-        updateEmptyFilterLabel()
+        addonTable.isHidden = spinning || options.isEmpty
+        streamTable.isHidden = spinning || options.isEmpty
     }
 
     private func hideStatus() {
@@ -378,8 +254,6 @@ final class StremioStreamPickerViewController: UIViewController {
         statusSpinner.stopAnimating()
         addonTable.isHidden = false
         streamTable.isHidden = false
-        filterStack.isHidden = false
-        updateEmptyFilterLabel()
     }
 
     /// A move from one row to another is the user browsing: from then on the list stays on what
@@ -393,8 +267,7 @@ final class StremioStreamPickerViewController: UIViewController {
     }
 
     override var preferredFocusEnvironments: [UIFocusEnvironment] {
-        if streamTable.isHidden { return isQuickStart ? [chooseButton] : [cancelButton] }
-        return [streamTable]
+        streamTable.isHidden ? [cancelButton] : [streamTable]
     }
 
     private var laidOutWidth: CGFloat = 0
@@ -426,11 +299,12 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         if tableView === addonTable { return addons.count }
-        return section == 0 ? (shownRecommended == nil ? 0 : 1) : visibleOptions.count
+        return section == 0 ? (lastWatchedOption == nil ? 0 : 1) : visibleOptions.count
     }
 
     private func streamOption(at indexPath: IndexPath) -> StremioStreamOption {
-        indexPath.section == 0 ? (shownRecommended ?? visibleOptions[indexPath.row]) : visibleOptions[indexPath.row]
+        if indexPath.section == 0, let lastWatchedOption { return lastWatchedOption }
+        return visibleOptions[indexPath.row]
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -442,14 +316,14 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
             return cell
         }
         let cell = tableView.dequeueReusableCell(withIdentifier: StremioStreamCell.id, for: indexPath) as! StremioStreamCell
-        cell.configure(streamOption(at: indexPath), recommended: indexPath.section == 0)
+        cell.configure(streamOption(at: indexPath), lastWatched: indexPath.section == 0)
         return cell
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
         if tableView === addonTable { return 100 }
         return StremioStreamCell.height(for: streamOption(at: indexPath), width: tableView.bounds.width,
-                                        recommended: indexPath.section == 0)
+                                        lastWatched: indexPath.section == 0)
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
@@ -458,9 +332,8 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
             userChoseAddon = true
             selectedAddon = addons[indexPath.row].isAll ? nil : addons[indexPath.row].name
             addonTable.reloadData()
-            shownStreamIDs = (shownRecommended.map { ["r" + $0.id] } ?? []) + visibleOptions.map(\.id)
+            shownStreamIDs = shownIDs
             streamTable.reloadData()
-            updateEmptyFilterLabel()
             streamTable.setContentOffset(CGPoint(x: 0, y: -streamTable.contentInset.top), animated: false)
             return
         }
@@ -472,7 +345,7 @@ extension StremioStreamPickerViewController: UITableViewDataSource, UITableViewD
         if let id = preselectedID, let row = visibleOptions.firstIndex(where: { $0.id == id }) {
             return IndexPath(row: row, section: 1)
         }
-        if shownRecommended != nil { return IndexPath(row: 0, section: 0) }
+        if lastWatchedOption != nil { return IndexPath(row: 0, section: 0) }
         return visibleOptions.isEmpty ? nil : IndexPath(row: 0, section: 1)
     }
 }
@@ -570,23 +443,23 @@ private final class StremioStreamCell: StremioGlassCell {
     /// Card padding 22 top and bottom, plus 6 of row inset each way.
     static let verticalChrome: CGFloat = 22 * 2 + 6 * 2
 
-    static func nameText(_ option: StremioStreamOption, recommended: Bool = false) -> String {
+    static func nameText(_ option: StremioStreamOption, lastWatched: Bool = false) -> String {
         let name = option.stream.name ?? option.addonName
-        return recommended ? "★ " + String(localized: "Recommended") + "\n" + name : name
+        return lastWatched ? String(localized: "Last Watched") + "\n" + name : name
     }
     static func descriptionText(_ option: StremioStreamOption) -> String {
         option.stream.description ?? option.stream.filename ?? option.source.fileName ?? ""
     }
 
     /// The row's exact height for this list width: the taller of its two columns.
-    static func height(for option: StremioStreamOption, width: CGFloat, recommended: Bool = false) -> CGFloat {
+    static func height(for option: StremioStreamOption, width: CGFloat, lastWatched: Bool = false) -> CGFloat {
         let descriptionWidth = max(200, width - horizontalChrome - nameWidth)
         func measure(_ text: String, _ font: UIFont, _ width: CGFloat) -> CGFloat {
             ceil((text as NSString).boundingRect(
                 with: CGSize(width: width, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font], context: nil).height)
         }
-        let columns = max(measure(nameText(option, recommended: recommended), nameFont, nameWidth),
+        let columns = max(measure(nameText(option, lastWatched: lastWatched), nameFont, nameWidth),
                           measure(descriptionText(option), descriptionFont, descriptionWidth))
         return max(100, columns + verticalChrome + 4)
     }
@@ -619,9 +492,9 @@ private final class StremioStreamCell: StremioGlassCell {
     required init?(coder: NSCoder) { fatalError() }
 
     /// The addon's own words: its label on the left, its description (file, size, quality) on the right.
-    func configure(_ option: StremioStreamOption, recommended: Bool = false) {
-        nameLabel.text = Self.nameText(option, recommended: recommended)
-        nameLabel.textColor = recommended ? UIColor(red: 1, green: 0.82, blue: 0.35, alpha: 1) : .white
+    func configure(_ option: StremioStreamOption, lastWatched: Bool = false) {
+        nameLabel.text = Self.nameText(option, lastWatched: lastWatched)
+        nameLabel.textColor = lastWatched ? UIColor(red: 1, green: 0.82, blue: 0.35, alpha: 1) : .white
         descriptionLabel.text = Self.descriptionText(option)
         contentView.alpha = option.isUncached ? 0.55 : 1
     }

@@ -203,25 +203,18 @@ nonisolated enum StremioRecommendation {
         return best(playable)
     }
 
+    /// The picker's "Last Watched" card: the stream last played for this title, or for a show
+    /// the same release of this episode. Nil when no stream matches it exactly.
+    static func lastWatched(_ options: [StremioStreamOption], remembered: StremioStreamMemory.Choice?) -> StremioStreamOption? {
+        guard let remembered else { return nil }
+        return options.first { $0.id == remembered.streamID }
+            ?? remembered.fileName.flatMap { file in options.first { $0.source.fileName == file } }
+            ?? remembered.bingeGroup.flatMap { group in
+                options.first { $0.stream.bingeGroup == group && $0.addonName == remembered.addon }
+            }
+    }
+
     private static func best(_ options: [StremioStreamOption]) -> StremioStreamOption? {
         VersionRanking.choose(.best, from: options.map(\.source)).flatMap { best in options.first { $0.id == best.id } }
-    }
-
-    // The picker's filters.
-    static func isRemux(_ option: StremioStreamOption) -> Bool {
-        [option.stream.name, option.stream.description, option.stream.filename, option.source.fileName]
-            .compactMap { $0?.lowercased() }.contains { $0.contains("remux") }
-    }
-
-    static func is4K(_ option: StremioStreamOption) -> Bool { option.source.videoResolution == "4k" }
-
-    static func isDolbyVision(_ option: StremioStreamOption) -> Bool {
-        guard let range = option.source.videoTracks.first?.videoRange else { return false }
-        if case .dolbyVision = range { return true }
-        return false
-    }
-
-    static func isAtmos(_ option: StremioStreamOption) -> Bool {
-        option.source.audioTracks.contains { $0.profile?.contains("atmos") == true }
     }
 }
